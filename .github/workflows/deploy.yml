@@ -13,7 +13,6 @@ on:
         options:
           - plan
           - apply
-          - destroy
 
 env:
   TF_VERSION: "1.7.0"
@@ -66,22 +65,12 @@ jobs:
             -out=tfplan
 
       - name: Terraform Apply
-        if: github.event.inputs.action != 'plan' && github.event.inputs.action != 'destroy'
+        if: github.event.inputs.action != 'plan'
         working-directory: terraform/azure
         run: terraform apply -auto-approve tfplan
 
-      - name: Terraform Destroy
-        if: github.event.inputs.action == 'destroy'
-        working-directory: terraform/azure
-        run: |
-          terraform destroy -auto-approve \
-            -var="project_prefix=${{ env.PROJECT_PREFIX }}" \
-            -var="azure_location=${{ vars.AZURE_LOCATION || 'eastus' }}" \
-            -var="notification_email=${{ vars.NOTIFICATION_EMAIL }}"
-
       - name: Get Outputs
         id: outputs
-        if: github.event.inputs.action != 'destroy'
         working-directory: terraform/azure
         run: |
           echo "email_connection_string=$(terraform output -raw communication_service_connection_string)" >> "$GITHUB_OUTPUT"
@@ -120,21 +109,12 @@ jobs:
             -out=tfplan
 
       - name: Terraform Apply
-        if: github.event.inputs.action != 'plan' && github.event.inputs.action != 'destroy'
+        if: github.event.inputs.action != 'plan'
         working-directory: terraform/aws-core
         run: terraform apply -auto-approve tfplan
 
-      - name: Terraform Destroy
-        if: github.event.inputs.action == 'destroy'
-        working-directory: terraform/aws-core
-        run: |
-          terraform destroy -auto-approve \
-            -var="project_prefix=${{ env.PROJECT_PREFIX }}" \
-            -var="aws_region=${{ env.AWS_REGION }}"
-
       - name: Get Outputs
         id: outputs
-        if: github.event.inputs.action != 'destroy'
         working-directory: terraform/aws-core
         run: |
           echo "image_bucket_name=$(terraform output -raw image_bucket_name)" >> "$GITHUB_OUTPUT"
@@ -187,29 +167,12 @@ jobs:
             -out=tfplan
 
       - name: Terraform Apply
-        if: github.event.inputs.action != 'plan' && github.event.inputs.action != 'destroy'
+        if: github.event.inputs.action != 'plan'
         working-directory: terraform/gcp
         run: terraform apply -auto-approve tfplan
 
-      - name: Terraform Destroy
-        if: github.event.inputs.action == 'destroy'
-        working-directory: terraform/gcp
-        run: |
-          terraform destroy -auto-approve \
-            -var="project_prefix=${{ env.PROJECT_PREFIX }}" \
-            -var="gcp_project_id=${{ vars.GCP_PROJECT_ID }}" \
-            -var="gcp_region=${{ vars.GCP_REGION || 'us-central1' }}" \
-            -var="s3_bucket_name=${{ needs.deploy-aws-core.outputs.image_bucket_name }}" \
-            -var="aws_access_key_id=${{ secrets.AWS_ACCESS_KEY_ID }}" \
-            -var="aws_secret_access_key=${{ secrets.AWS_SECRET_ACCESS_KEY }}" \
-            -var="aws_region=${{ env.AWS_REGION }}" \
-            -var="azure_email_connection_string=${{ needs.deploy-azure.outputs.email_connection_string }}" \
-            -var="azure_sender_address=${{ needs.deploy-azure.outputs.sender_address }}" \
-            -var="notification_email=${{ vars.NOTIFICATION_EMAIL }}"
-
       - name: Get Outputs
         id: outputs
-        if: github.event.inputs.action != 'destroy'
         working-directory: terraform/gcp
         run: |
           echo "function_url=$(terraform output -raw function_url)" >> "$GITHUB_OUTPUT"
@@ -253,24 +216,12 @@ jobs:
             -out=tfplan
 
       - name: Terraform Apply
-        if: github.event.inputs.action != 'plan' && github.event.inputs.action != 'destroy'
+        if: github.event.inputs.action != 'plan'
         working-directory: terraform/aws-trigger
         run: terraform apply -auto-approve tfplan
 
-      - name: Terraform Destroy
-        if: github.event.inputs.action == 'destroy'
-        working-directory: terraform/aws-trigger
-        run: |
-          terraform destroy -auto-approve \
-            -var="project_prefix=${{ env.PROJECT_PREFIX }}" \
-            -var="aws_region=${{ env.AWS_REGION }}" \
-            -var="image_bucket_name=${{ needs.deploy-aws-core.outputs.image_bucket_name }}" \
-            -var="image_bucket_arn=${{ needs.deploy-aws-core.outputs.image_bucket_arn }}" \
-            -var="gcp_function_url=${{ needs.deploy-gcp.outputs.function_url }}"
-
       - name: Get Outputs
         id: outputs
-        if: github.event.inputs.action != 'destroy'
         working-directory: terraform/aws-trigger
         run: |
           echo "lambda_function_name=$(terraform output -raw lambda_function_name)" >> "$GITHUB_OUTPUT"

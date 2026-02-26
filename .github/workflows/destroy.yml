@@ -1,0 +1,189 @@
+name: Destroy All Infrastructure
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Type "destroy" to confirm deletion of ALL infrastructure'
+        required: true
+        type: string
+
+env:
+  TF_VERSION: "1.7.0"
+  TF_INPUT: false
+  PROJECT_PREFIX: "imgclass"
+
+  # AWS credentials
+  AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+  AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+  AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+
+  # Azure credentials
+  ARM_CLIENT_ID: ${{ secrets.ARM_CLIENT_ID }}
+  ARM_CLIENT_SECRET: ${{ secrets.ARM_CLIENT_SECRET }}
+  ARM_TENANT_ID: ${{ secrets.ARM_TENANT_ID }}
+  ARM_SUBSCRIPTION_ID: ${{ secrets.ARM_SUBSCRIPTION_ID }}
+
+permissions:
+  contents: read
+
+jobs:
+  # =========================================================================
+  # Gate: Require explicit confirmation
+  # =========================================================================
+  confirm:
+    name: "Confirm Destruction"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate confirmation
+        run: |
+          if [ "${{ inputs.confirm }}" != "destroy" ]; then
+            echo "::error::You must type 'destroy' to confirm. Got: '${{ inputs.confirm }}'"
+            exit 1
+          fi
+          echo "✓ Destruction confirmed."
+
+  # =========================================================================
+  # Step 1: Destroy AWS Trigger (depends on nothing downstream)
+  # =========================================================================
+  destroy-aws-trigger:
+    name: "Destroy — AWS Event Trigger"
+    runs-on: ubuntu-latest
+    needs: confirm
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      - name: Terraform Init
+        working-directory: terraform/aws-trigger
+        run: terraform init
+
+      - name: Terraform Destroy
+        working-directory: terraform/aws-trigger
+        run: |
+          terraform destroy -auto-approve \
+            -var="project_prefix=${{ env.PROJECT_PREFIX }}" \
+            -var="aws_region=${{ env.AWS_REGION }}" \
+            -var="image_bucket_name=placeholder" \
+            -var="image_bucket_arn=arn:aws:s3:::placeholder" \
+            -var="gcp_function_url=https://placeholder"
+
+  # =========================================================================
+  # Step 2: Destroy GCP (after aws-trigger is gone)
+  # =========================================================================
+  destroy-gcp:
+    name: "Destroy — GCP Classification Function"
+    runs-on: ubuntu-latest
+    needs: [confirm, destroy-aws-trigger]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      - name: Authenticate to GCP
+        run: |
+          echo '${{ secrets.GCP_SERVICE_ACCOUNT_KEY }}' | base64 -d > /tmp/gcp-key.json
+          echo "GOOGLE_APPLICATION_CREDENTIALS=/tmp/gcp-key.json" >> "$GITHUB_ENV"
+
+      - name: Terraform Init
+        working-directory: terraform/gcp
+        run: terraform init
+
+      - name: Terraform Destroy
+        working-directory: terraform/gcp
+        run: |
+          terraform destroy -auto-approve \
+            -var="project_prefix=${{ env.PROJECT_PREFIX }}" \
+            -var="gcp_project_id=${{ vars.GCP_PROJECT_ID }}" \
+            -var="gcp_region=${{ vars.GCP_REGION || 'us-central1' }}" \
+            -var="s3_bucket_name=placeholder" \
+            -var="aws_access_key_id=placeholder" \
+            -var="aws_secret_access_key=placeholder" \
+            -var="aws_region=${{ env.AWS_REGION }}" \
+            -var="azure_email_connection_string=placeholder" \
+            -var="azure_sender_address=placeholder" \
+            -var="notification_email=placeholder@example.com"
+
+      - name: Cleanup credentials
+        if: always()
+        run: rm -f /tmp/gcp-key.json
+
+  # =========================================================================
+  # Step 3: Destroy AWS Core and Azure (in parallel, after GCP is gone)
+  # =========================================================================
+  destroy-aws-core:
+    name: "Destroy — AWS Storage & Website"
+    runs-on: ubuntu-latest
+    needs: [confirm, destroy-gcp]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      - name: Terraform Init
+        working-directory: terraform/aws-core
+        run: terraform init
+
+      - name: Terraform Destroy
+        working-directory: terraform/aws-core
+        run: |
+          terraform destroy -auto-approve \
+            -var="project_prefix=${{ env.PROJECT_PREFIX }}" \
+            -var="aws_region=${{ env.AWS_REGION }}"
+
+  destroy-azure:
+    name: "Destroy — Azure Email Service"
+    runs-on: ubuntu-latest
+    needs: [confirm, destroy-gcp]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      - name: Terraform Init
+        working-directory: terraform/azure
+        run: terraform init
+
+      - name: Terraform Destroy
+        working-directory: terraform/azure
+        run: |
+          terraform destroy -auto-approve \
+            -var="project_prefix=${{ env.PROJECT_PREFIX }}" \
+            -var="azure_location=${{ vars.AZURE_LOCATION || 'eastus' }}" \
+            -var="notification_email=${{ vars.NOTIFICATION_EMAIL }}"
+
+  # =========================================================================
+  # Summary
+  # =========================================================================
+  summary:
+    name: "Destruction Summary"
+    runs-on: ubuntu-latest
+    needs: [destroy-aws-trigger, destroy-gcp, destroy-aws-core, destroy-azure]
+    if: always()
+    steps:
+      - name: Print Summary
+        run: |
+          echo "## 🗑️ Destruction Summary" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Component | Cloud | Status |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|-----------|-------|--------|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Event Trigger | AWS | ${{ needs.destroy-aws-trigger.result }} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Classification Function | GCP | ${{ needs.destroy-gcp.result }} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Storage & Website | AWS | ${{ needs.destroy-aws-core.result }} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Email Service | Azure | ${{ needs.destroy-azure.result }} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "> **Note:** State backends (S3, GCS, Azure Storage) were NOT destroyed." >> "$GITHUB_STEP_SUMMARY"
+          echo "> Delete them manually if no longer needed." >> "$GITHUB_STEP_SUMMARY"
