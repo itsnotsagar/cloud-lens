@@ -6,7 +6,7 @@ resource "aws_api_gateway_rest_api" "main" {
   name        = "${var.project_prefix}-api"
   description = "API Gateway to proxy image uploads to S3"
 
-  binary_media_types = ["image/jpeg", "image/png", "image/webp"]
+  binary_media_types = ["*/*"]
 
   endpoint_configuration {
     types = ["REGIONAL"]
@@ -87,8 +87,67 @@ resource "aws_api_gateway_integration_response" "put_200" {
 }
 
 # =============================================================================
-# CORS: OPTIONS method for preflight
+# CORS: Lambda-backed OPTIONS (MOCK is broken with binary_media_types)
 # =============================================================================
+
+data "archive_file" "cors_lambda" {
+  type                    = "zip"
+  source_content          = <<-PYTHON
+def handler(event, context):
+    return {
+        "statusCode": 200,
+        "headers": {
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "PUT,OPTIONS",
+            "Access-Control-Allow-Headers": "Content-Type,Accept,X-Amz-Date,Authorization,X-Api-Key",
+        },
+        "body": "",
+    }
+PYTHON
+  source_content_filename = "cors.py"
+  output_path             = "${path.module}/../../.build/cors_lambda.zip"
+}
+
+resource "aws_iam_role" "cors_lambda" {
+  name = "${var.project_prefix}-cors-lambda-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Action = "sts:AssumeRole"
+      Effect = "Allow"
+      Principal = {
+        Service = "lambda.amazonaws.com"
+      }
+    }]
+  })
+
+  tags = { Project = var.project_prefix }
+}
+
+resource "aws_iam_role_policy_attachment" "cors_lambda_basic" {
+  role       = aws_iam_role.cors_lambda.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+}
+
+resource "aws_lambda_function" "cors" {
+  function_name    = "${var.project_prefix}-cors"
+  role             = aws_iam_role.cors_lambda.arn
+  handler          = "cors.handler"
+  runtime          = "python3.11"
+  filename         = data.archive_file.cors_lambda.output_path
+  source_code_hash = data.archive_file.cors_lambda.output_base64sha256
+
+  tags = { Project = var.project_prefix }
+}
+
+resource "aws_lambda_permission" "cors_apigw" {
+  statement_id  = "AllowAPIGatewayInvoke"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.cors.function_name
+  principal     = "apigateway.amazonaws.com"
+  source_arn    = "${aws_api_gateway_rest_api.main.execution_arn}/*/*"
+}
 
 resource "aws_api_gateway_method" "options_upload" {
   rest_api_id   = aws_api_gateway_rest_api.main.id
@@ -98,48 +157,12 @@ resource "aws_api_gateway_method" "options_upload" {
 }
 
 resource "aws_api_gateway_integration" "options_upload" {
-  rest_api_id = aws_api_gateway_rest_api.main.id
-  resource_id = aws_api_gateway_resource.upload_filename.id
-  http_method = aws_api_gateway_method.options_upload.http_method
-  type        = "MOCK"
-
-  request_templates = {
-    "application/json" = "{\"statusCode\": 200}"
-  }
-
-  passthrough_behavior = "WHEN_NO_MATCH"
-}
-
-resource "aws_api_gateway_method_response" "options_200" {
-  rest_api_id = aws_api_gateway_rest_api.main.id
-  resource_id = aws_api_gateway_resource.upload_filename.id
-  http_method = aws_api_gateway_method.options_upload.http_method
-  status_code = "200"
-
-  response_parameters = {
-    "method.response.header.Access-Control-Allow-Headers" = true
-    "method.response.header.Access-Control-Allow-Methods" = true
-    "method.response.header.Access-Control-Allow-Origin"  = true
-  }
-}
-
-resource "aws_api_gateway_integration_response" "options_200" {
-  rest_api_id = aws_api_gateway_rest_api.main.id
-  resource_id = aws_api_gateway_resource.upload_filename.id
-  http_method = aws_api_gateway_method.options_upload.http_method
-  status_code = "200"
-
-  response_parameters = {
-    "method.response.header.Access-Control-Allow-Headers" = "'Content-Type,Accept,X-Amz-Date,Authorization,X-Api-Key'"
-    "method.response.header.Access-Control-Allow-Methods" = "'PUT,OPTIONS'"
-    "method.response.header.Access-Control-Allow-Origin"  = "'*'"
-  }
-
-  response_templates = {
-    "application/json" = ""
-  }
-
-  depends_on = [aws_api_gateway_integration.options_upload]
+  rest_api_id             = aws_api_gateway_rest_api.main.id
+  resource_id             = aws_api_gateway_resource.upload_filename.id
+  http_method             = aws_api_gateway_method.options_upload.http_method
+  integration_http_method = "POST"
+  type                    = "AWS_PROXY"
+  uri                     = aws_lambda_function.cors.invoke_arn
 }
 
 # =============================================================================
@@ -183,8 +206,7 @@ resource "aws_api_gateway_deployment" "main" {
       aws_api_gateway_integration_response.put_200,
       aws_api_gateway_method.options_upload,
       aws_api_gateway_integration.options_upload,
-      aws_api_gateway_method_response.options_200,
-      aws_api_gateway_integration_response.options_200,
+      aws_lambda_function.cors,
       aws_api_gateway_gateway_response.default_4xx,
       aws_api_gateway_gateway_response.default_5xx,
     ]))
@@ -198,7 +220,7 @@ resource "aws_api_gateway_deployment" "main" {
     aws_api_gateway_integration.put_s3,
     aws_api_gateway_integration_response.put_200,
     aws_api_gateway_integration.options_upload,
-    aws_api_gateway_integration_response.options_200,
+    aws_lambda_function.cors,
     aws_api_gateway_gateway_response.default_4xx,
     aws_api_gateway_gateway_response.default_5xx,
   ]

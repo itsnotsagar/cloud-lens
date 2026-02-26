@@ -15,6 +15,7 @@ src/classify-function/*.pyc
 
 # Zip artifacts
 *.zip
+.build/
 
 # OS
 .DS_Store
