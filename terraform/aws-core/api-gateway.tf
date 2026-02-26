@@ -6,7 +6,7 @@ resource "aws_api_gateway_rest_api" "main" {
   name        = "${var.project_prefix}-api"
   description = "API Gateway to proxy image uploads to S3"
 
-  binary_media_types = ["*/*"]
+  binary_media_types = ["image/jpeg", "image/png", "image/webp"]
 
   endpoint_configuration {
     types = ["REGIONAL"]
