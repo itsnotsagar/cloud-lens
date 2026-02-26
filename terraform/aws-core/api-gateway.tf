@@ -39,7 +39,8 @@ resource "aws_api_gateway_method" "put_upload" {
   authorization = "NONE"
 
   request_parameters = {
-    "method.request.path.filename" = true
+    "method.request.path.filename"    = true
+    "method.request.header.Content-Type" = false
   }
 }
 
@@ -54,7 +55,8 @@ resource "aws_api_gateway_integration" "put_s3" {
   credentials             = aws_iam_role.api_gateway_s3.arn
 
   request_parameters = {
-    "integration.request.path.filename" = "method.request.path.filename"
+    "integration.request.path.filename"    = "method.request.path.filename"
+    "integration.request.header.Content-Type" = "method.request.header.Content-Type"
   }
 }
 
@@ -126,7 +128,7 @@ resource "aws_api_gateway_integration_response" "options_200" {
   status_code = "200"
 
   response_parameters = {
-    "method.response.header.Access-Control-Allow-Headers" = "'Content-Type,X-Amz-Date,Authorization,X-Api-Key'"
+    "method.response.header.Access-Control-Allow-Headers" = "'Content-Type,Accept,X-Amz-Date,Authorization,X-Api-Key'"
     "method.response.header.Access-Control-Allow-Methods" = "'PUT,OPTIONS'"
     "method.response.header.Access-Control-Allow-Origin"  = "'*'"
   }
