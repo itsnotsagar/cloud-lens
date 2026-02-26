@@ -92,10 +92,10 @@ resource "aws_s3_object" "index_html" {
   bucket = aws_s3_bucket.website.id
   key    = "index.html"
   content = templatefile("${path.module}/../../src/frontend/index.html", {
-    api_gateway_url = aws_api_gateway_deployment.main.invoke_url
+    api_gateway_url = aws_api_gateway_stage.prod.invoke_url
   })
   content_type = "text/html"
   etag = md5(templatefile("${path.module}/../../src/frontend/index.html", {
-    api_gateway_url = aws_api_gateway_deployment.main.invoke_url
+    api_gateway_url = aws_api_gateway_stage.prod.invoke_url
   }))
 }
