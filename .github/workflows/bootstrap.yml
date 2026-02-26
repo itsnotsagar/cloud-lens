@@ -25,6 +25,7 @@ jobs:
   bootstrap:
     name: "Create State Backends"
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
 
@@ -40,7 +41,7 @@ jobs:
 
       - name: Terraform Init
         working-directory: terraform/bootstrap
-        run: terraform init
+        run: terraform init -upgrade
 
       - name: Terraform Apply
         working-directory: terraform/bootstrap

@@ -12,7 +12,7 @@ terraform {
     }
     azurerm = {
       source  = "hashicorp/azurerm"
-      version = "~> 3.0"
+      version = "~> 4.0"
     }
   }
 }
@@ -28,4 +28,5 @@ provider "google" {
 
 provider "azurerm" {
   features {}
+  resource_provider_registrations = "none"
 }
