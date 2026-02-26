@@ -39,6 +39,9 @@ jobs:
           echo '${{ secrets.GCP_SERVICE_ACCOUNT_KEY }}' | base64 -d > /tmp/gcp-key.json
           echo "GOOGLE_APPLICATION_CREDENTIALS=/tmp/gcp-key.json" >> "$GITHUB_ENV"
 
+      - name: Verify AWS Credentials
+        run: aws sts get-caller-identity
+
       - name: Terraform Init
         working-directory: terraform/bootstrap
         run: terraform init -upgrade
