@@ -2,11 +2,10 @@ terraform {
   required_version = ">= 1.5.0"
 
   backend "s3" {
-    bucket       = "imgclass-tf-state-aws"
-    key          = "aws-core/terraform.tfstate"
-    region       = "us-east-1"
-    use_lockfile = true
-    encrypt      = true
+    bucket  = "imgclass-tf-state-aws"
+    key     = "aws-core/terraform.tfstate"
+    region  = "us-east-1"
+    encrypt = true
   }
 
   required_providers {
