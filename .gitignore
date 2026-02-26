@@ -1,0 +1,30 @@
+# Terraform
+**/.terraform/
+**/*.tfstate
+**/*.tfstate.backup
+**/*.tfvars
+!*.tfvars.example
+.terraform.lock.hcl
+**/.terraform.lock.hcl
+
+# Function packages
+src/lambda-relay/node_modules/
+src/lambda-relay/package-lock.json
+src/classify-function/__pycache__/
+src/classify-function/*.pyc
+
+# Zip artifacts
+*.zip
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# Secrets
+*.pem
+*.key
+*credentials*.json

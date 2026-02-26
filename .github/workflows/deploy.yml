@@ -1,0 +1,307 @@
+name: Deploy Multi-Cloud Image Classification
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      action:
+        description: 'Terraform action'
+        required: true
+        default: 'apply'
+        type: choice
+        options:
+          - plan
+          - apply
+          - destroy
+
+env:
+  TF_VERSION: "1.7.0"
+  TF_INPUT: false
+  PROJECT_PREFIX: "imgclass"
+
+  # AWS credentials
+  AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+  AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+  AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+
+  # Azure credentials
+  ARM_CLIENT_ID: ${{ secrets.ARM_CLIENT_ID }}
+  ARM_CLIENT_SECRET: ${{ secrets.ARM_CLIENT_SECRET }}
+  ARM_TENANT_ID: ${{ secrets.ARM_TENANT_ID }}
+  ARM_SUBSCRIPTION_ID: ${{ secrets.ARM_SUBSCRIPTION_ID }}
+
+permissions:
+  contents: read
+
+jobs:
+  # =========================================================================
+  # Step 1a: Deploy Azure (Communication Services for email)
+  # =========================================================================
+  deploy-azure:
+    name: "Azure — Email Service"
+    runs-on: ubuntu-latest
+    outputs:
+      email_connection_string: ${{ steps.outputs.outputs.email_connection_string }}
+      sender_address: ${{ steps.outputs.outputs.sender_address }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      - name: Terraform Init
+        working-directory: terraform/azure
+        run: terraform init
+
+      - name: Terraform Plan
+        working-directory: terraform/azure
+        run: |
+          terraform plan \
+            -var="project_prefix=${{ env.PROJECT_PREFIX }}" \
+            -var="azure_location=${{ vars.AZURE_LOCATION || 'eastus' }}" \
+            -var="notification_email=${{ vars.NOTIFICATION_EMAIL }}" \
+            -out=tfplan
+
+      - name: Terraform Apply
+        if: github.event.inputs.action != 'plan' && github.event.inputs.action != 'destroy'
+        working-directory: terraform/azure
+        run: terraform apply -auto-approve tfplan
+
+      - name: Terraform Destroy
+        if: github.event.inputs.action == 'destroy'
+        working-directory: terraform/azure
+        run: |
+          terraform destroy -auto-approve \
+            -var="project_prefix=${{ env.PROJECT_PREFIX }}" \
+            -var="azure_location=${{ vars.AZURE_LOCATION || 'eastus' }}" \
+            -var="notification_email=${{ vars.NOTIFICATION_EMAIL }}"
+
+      - name: Get Outputs
+        id: outputs
+        if: github.event.inputs.action != 'destroy'
+        working-directory: terraform/azure
+        run: |
+          echo "email_connection_string=$(terraform output -raw communication_service_connection_string)" >> "$GITHUB_OUTPUT"
+          echo "sender_address=$(terraform output -raw sender_address)" >> "$GITHUB_OUTPUT"
+
+  # =========================================================================
+  # Step 1b: Deploy AWS Core (S3 + API Gateway + Static Site)
+  # Runs in parallel with deploy-azure
+  # =========================================================================
+  deploy-aws-core:
+    name: "AWS — Storage & Website"
+    runs-on: ubuntu-latest
+    outputs:
+      image_bucket_name: ${{ steps.outputs.outputs.image_bucket_name }}
+      image_bucket_arn: ${{ steps.outputs.outputs.image_bucket_arn }}
+      website_url: ${{ steps.outputs.outputs.website_url }}
+      api_gateway_url: ${{ steps.outputs.outputs.api_gateway_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      - name: Terraform Init
+        working-directory: terraform/aws-core
+        run: terraform init
+
+      - name: Terraform Plan
+        working-directory: terraform/aws-core
+        run: |
+          terraform plan \
+            -var="project_prefix=${{ env.PROJECT_PREFIX }}" \
+            -var="aws_region=${{ env.AWS_REGION }}" \
+            -out=tfplan
+
+      - name: Terraform Apply
+        if: github.event.inputs.action != 'plan' && github.event.inputs.action != 'destroy'
+        working-directory: terraform/aws-core
+        run: terraform apply -auto-approve tfplan
+
+      - name: Terraform Destroy
+        if: github.event.inputs.action == 'destroy'
+        working-directory: terraform/aws-core
+        run: |
+          terraform destroy -auto-approve \
+            -var="project_prefix=${{ env.PROJECT_PREFIX }}" \
+            -var="aws_region=${{ env.AWS_REGION }}"
+
+      - name: Get Outputs
+        id: outputs
+        if: github.event.inputs.action != 'destroy'
+        working-directory: terraform/aws-core
+        run: |
+          echo "image_bucket_name=$(terraform output -raw image_bucket_name)" >> "$GITHUB_OUTPUT"
+          echo "image_bucket_arn=$(terraform output -raw image_bucket_arn)" >> "$GITHUB_OUTPUT"
+          echo "website_url=$(terraform output -raw website_url)" >> "$GITHUB_OUTPUT"
+          echo "api_gateway_url=$(terraform output -raw api_gateway_invoke_url)" >> "$GITHUB_OUTPUT"
+
+  # =========================================================================
+  # Step 2: Deploy GCP (Cloud Function + Vertex AI)
+  # Depends on Azure (email creds) and AWS Core (S3 bucket name)
+  # =========================================================================
+  deploy-gcp:
+    name: "GCP — Classification Function"
+    runs-on: ubuntu-latest
+    needs: [deploy-azure, deploy-aws-core]
+    if: always() && (needs.deploy-azure.result == 'success' && needs.deploy-aws-core.result == 'success')
+    outputs:
+      function_url: ${{ steps.outputs.outputs.function_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      - name: Authenticate to GCP
+        run: |
+          echo '${{ secrets.GCP_SERVICE_ACCOUNT_KEY }}' | base64 -d > /tmp/gcp-key.json
+          echo "GOOGLE_APPLICATION_CREDENTIALS=/tmp/gcp-key.json" >> "$GITHUB_ENV"
+
+      - name: Terraform Init
+        working-directory: terraform/gcp
+        run: terraform init
+
+      - name: Terraform Plan
+        working-directory: terraform/gcp
+        run: |
+          terraform plan \
+            -var="project_prefix=${{ env.PROJECT_PREFIX }}" \
+            -var="gcp_project_id=${{ vars.GCP_PROJECT_ID }}" \
+            -var="gcp_region=${{ vars.GCP_REGION || 'us-central1' }}" \
+            -var="s3_bucket_name=${{ needs.deploy-aws-core.outputs.image_bucket_name }}" \
+            -var="aws_access_key_id=${{ secrets.AWS_ACCESS_KEY_ID }}" \
+            -var="aws_secret_access_key=${{ secrets.AWS_SECRET_ACCESS_KEY }}" \
+            -var="aws_region=${{ env.AWS_REGION }}" \
+            -var="azure_email_connection_string=${{ needs.deploy-azure.outputs.email_connection_string }}" \
+            -var="azure_sender_address=${{ needs.deploy-azure.outputs.sender_address }}" \
+            -var="notification_email=${{ vars.NOTIFICATION_EMAIL }}" \
+            -out=tfplan
+
+      - name: Terraform Apply
+        if: github.event.inputs.action != 'plan' && github.event.inputs.action != 'destroy'
+        working-directory: terraform/gcp
+        run: terraform apply -auto-approve tfplan
+
+      - name: Terraform Destroy
+        if: github.event.inputs.action == 'destroy'
+        working-directory: terraform/gcp
+        run: |
+          terraform destroy -auto-approve \
+            -var="project_prefix=${{ env.PROJECT_PREFIX }}" \
+            -var="gcp_project_id=${{ vars.GCP_PROJECT_ID }}" \
+            -var="gcp_region=${{ vars.GCP_REGION || 'us-central1' }}" \
+            -var="s3_bucket_name=${{ needs.deploy-aws-core.outputs.image_bucket_name }}" \
+            -var="aws_access_key_id=${{ secrets.AWS_ACCESS_KEY_ID }}" \
+            -var="aws_secret_access_key=${{ secrets.AWS_SECRET_ACCESS_KEY }}" \
+            -var="aws_region=${{ env.AWS_REGION }}" \
+            -var="azure_email_connection_string=${{ needs.deploy-azure.outputs.email_connection_string }}" \
+            -var="azure_sender_address=${{ needs.deploy-azure.outputs.sender_address }}" \
+            -var="notification_email=${{ vars.NOTIFICATION_EMAIL }}"
+
+      - name: Get Outputs
+        id: outputs
+        if: github.event.inputs.action != 'destroy'
+        working-directory: terraform/gcp
+        run: |
+          echo "function_url=$(terraform output -raw function_url)" >> "$GITHUB_OUTPUT"
+
+      - name: Cleanup credentials
+        if: always()
+        run: rm -f /tmp/gcp-key.json
+
+  # =========================================================================
+  # Step 3: Deploy AWS Trigger (Lambda Relay + S3 Notification)
+  # Depends on GCP (function URL) and AWS Core (bucket details)
+  # =========================================================================
+  deploy-aws-trigger:
+    name: "AWS — Event Trigger"
+    runs-on: ubuntu-latest
+    needs: [deploy-gcp, deploy-aws-core]
+    if: always() && (needs.deploy-gcp.result == 'success' && needs.deploy-aws-core.result == 'success')
+    outputs:
+      lambda_function_name: ${{ steps.outputs.outputs.lambda_function_name }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      - name: Terraform Init
+        working-directory: terraform/aws-trigger
+        run: terraform init
+
+      - name: Terraform Plan
+        working-directory: terraform/aws-trigger
+        run: |
+          terraform plan \
+            -var="project_prefix=${{ env.PROJECT_PREFIX }}" \
+            -var="aws_region=${{ env.AWS_REGION }}" \
+            -var="image_bucket_name=${{ needs.deploy-aws-core.outputs.image_bucket_name }}" \
+            -var="image_bucket_arn=${{ needs.deploy-aws-core.outputs.image_bucket_arn }}" \
+            -var="gcp_function_url=${{ needs.deploy-gcp.outputs.function_url }}" \
+            -out=tfplan
+
+      - name: Terraform Apply
+        if: github.event.inputs.action != 'plan' && github.event.inputs.action != 'destroy'
+        working-directory: terraform/aws-trigger
+        run: terraform apply -auto-approve tfplan
+
+      - name: Terraform Destroy
+        if: github.event.inputs.action == 'destroy'
+        working-directory: terraform/aws-trigger
+        run: |
+          terraform destroy -auto-approve \
+            -var="project_prefix=${{ env.PROJECT_PREFIX }}" \
+            -var="aws_region=${{ env.AWS_REGION }}" \
+            -var="image_bucket_name=${{ needs.deploy-aws-core.outputs.image_bucket_name }}" \
+            -var="image_bucket_arn=${{ needs.deploy-aws-core.outputs.image_bucket_arn }}" \
+            -var="gcp_function_url=${{ needs.deploy-gcp.outputs.function_url }}"
+
+      - name: Get Outputs
+        id: outputs
+        if: github.event.inputs.action != 'destroy'
+        working-directory: terraform/aws-trigger
+        run: |
+          echo "lambda_function_name=$(terraform output -raw lambda_function_name)" >> "$GITHUB_OUTPUT"
+
+  # =========================================================================
+  # Summary
+  # =========================================================================
+  summary:
+    name: "Deployment Summary"
+    runs-on: ubuntu-latest
+    needs: [deploy-azure, deploy-aws-core, deploy-gcp, deploy-aws-trigger]
+    if: always()
+    steps:
+      - name: Print Summary
+        run: |
+          echo "## Deployment Summary" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Component | Cloud | Status |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|-----------|-------|--------|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Email Service | Azure | ${{ needs.deploy-azure.result }} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Storage & Website | AWS | ${{ needs.deploy-aws-core.result }} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Classification Function | GCP | ${{ needs.deploy-gcp.result }} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Event Trigger | AWS | ${{ needs.deploy-aws-trigger.result }} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "${{ needs.deploy-aws-core.result }}" == "success" ]; then
+            echo "### Endpoints" >> "$GITHUB_STEP_SUMMARY"
+            echo "- **Website:** http://${{ needs.deploy-aws-core.outputs.website_url }}" >> "$GITHUB_STEP_SUMMARY"
+            echo "- **API Gateway:** ${{ needs.deploy-aws-core.outputs.api_gateway_url }}" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+          if [ "${{ needs.deploy-gcp.result }}" == "success" ]; then
+            echo "- **Cloud Function:** ${{ needs.deploy-gcp.outputs.function_url }}" >> "$GITHUB_STEP_SUMMARY"
+          fi
