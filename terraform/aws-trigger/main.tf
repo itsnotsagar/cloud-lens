@@ -21,5 +21,5 @@ terraform {
 }
 
 provider "aws" {
-  region = var.aws_region
+  region = trimspace(var.aws_region)
 }
