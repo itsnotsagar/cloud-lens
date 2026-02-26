@@ -104,7 +104,7 @@ resource "aws_api_gateway_integration" "options_upload" {
   type        = "MOCK"
 
   request_templates = {
-    "application/json" = jsonencode({ statusCode = 200 })
+    "application/json" = "{\"statusCode\": 200}"
   }
 
   passthrough_behavior = "WHEN_NO_MATCH"
@@ -143,6 +143,32 @@ resource "aws_api_gateway_integration_response" "options_200" {
 }
 
 # =============================================================================
+# Gateway Responses — ensure CORS headers on ALL responses (including errors)
+# =============================================================================
+
+resource "aws_api_gateway_gateway_response" "default_4xx" {
+  rest_api_id   = aws_api_gateway_rest_api.main.id
+  response_type = "DEFAULT_4XX"
+
+  response_parameters = {
+    "gatewayresponse.header.Access-Control-Allow-Origin"  = "'*'"
+    "gatewayresponse.header.Access-Control-Allow-Headers" = "'Content-Type,Accept,X-Amz-Date,Authorization,X-Api-Key'"
+    "gatewayresponse.header.Access-Control-Allow-Methods" = "'PUT,OPTIONS'"
+  }
+}
+
+resource "aws_api_gateway_gateway_response" "default_5xx" {
+  rest_api_id   = aws_api_gateway_rest_api.main.id
+  response_type = "DEFAULT_5XX"
+
+  response_parameters = {
+    "gatewayresponse.header.Access-Control-Allow-Origin"  = "'*'"
+    "gatewayresponse.header.Access-Control-Allow-Headers" = "'Content-Type,Accept,X-Amz-Date,Authorization,X-Api-Key'"
+    "gatewayresponse.header.Access-Control-Allow-Methods" = "'PUT,OPTIONS'"
+  }
+}
+
+# =============================================================================
 # API Gateway Deployment
 # =============================================================================
 
@@ -159,6 +185,8 @@ resource "aws_api_gateway_deployment" "main" {
       aws_api_gateway_integration.options_upload,
       aws_api_gateway_method_response.options_200,
       aws_api_gateway_integration_response.options_200,
+      aws_api_gateway_gateway_response.default_4xx,
+      aws_api_gateway_gateway_response.default_5xx,
     ]))
   }
 
@@ -171,6 +199,8 @@ resource "aws_api_gateway_deployment" "main" {
     aws_api_gateway_integration_response.put_200,
     aws_api_gateway_integration.options_upload,
     aws_api_gateway_integration_response.options_200,
+    aws_api_gateway_gateway_response.default_4xx,
+    aws_api_gateway_gateway_response.default_5xx,
   ]
 }
 
