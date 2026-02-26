@@ -106,6 +106,8 @@ resource "aws_api_gateway_integration" "options_upload" {
   request_templates = {
     "application/json" = jsonencode({ statusCode = 200 })
   }
+
+  passthrough_behavior = "WHEN_NO_MATCH"
 }
 
 resource "aws_api_gateway_method_response" "options_200" {
@@ -133,6 +135,10 @@ resource "aws_api_gateway_integration_response" "options_200" {
     "method.response.header.Access-Control-Allow-Origin"  = "'*'"
   }
 
+  response_templates = {
+    "application/json" = ""
+  }
+
   depends_on = [aws_api_gateway_integration.options_upload]
 }
 
@@ -147,8 +153,12 @@ resource "aws_api_gateway_deployment" "main" {
     redeployment = sha1(jsonencode([
       aws_api_gateway_method.put_upload,
       aws_api_gateway_integration.put_s3,
+      aws_api_gateway_method_response.put_200,
+      aws_api_gateway_integration_response.put_200,
       aws_api_gateway_method.options_upload,
       aws_api_gateway_integration.options_upload,
+      aws_api_gateway_method_response.options_200,
+      aws_api_gateway_integration_response.options_200,
     ]))
   }
 
