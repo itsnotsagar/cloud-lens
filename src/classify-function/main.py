@@ -165,10 +165,15 @@ def classify_with_gemini(image_bytes: bytes, filename: str) -> str:
 
     # Use stable model version with fallback
     try:
-        model = GenerativeModel("gemini-1.5-flash")
+        # Try gemini-pro-vision first (more widely available)
+        model = GenerativeModel("gemini-pro-vision")
     except Exception as e:
-        print(f"Error initializing Gemini model: {e}")
-        raise RuntimeError("Failed to initialize Gemini model") from e
+        print(f"Error initializing gemini-pro-vision, trying gemini-1.5-flash-001: {e}")
+        try:
+            model = GenerativeModel("gemini-1.5-flash-001")
+        except Exception as e2:
+            print(f"Error initializing gemini-1.5-flash-001: {e2}")
+            raise RuntimeError("Failed to initialize Gemini model") from e2
 
     # Determine MIME type from filename
     ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else "jpeg"
