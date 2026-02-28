@@ -1,10 +1,11 @@
 import json
 import os
+import time
 import traceback
 
 import boto3
 import functions_framework
-import vertexai
+from google.cloud import aiplatform
 from azure.communication.email import EmailClient
 from botocore.config import Config
 from google.cloud import secretmanager
@@ -27,6 +28,7 @@ _secrets_cache = {}
 _s3_client = None
 _email_client = None
 _gemini_model = None
+_processed_images = {}  # Cache to prevent duplicate processing
 
 # Validate required environment variables at startup
 REQUIRED_ENV_VARS = [
@@ -89,9 +91,33 @@ def classify_image(request):
 
         bucket = request_json.get("bucket", S3_BUCKET_NAME)
         key = request_json.get("key", "")
+        timestamp = request_json.get("timestamp", "")
 
         if not bucket or not key:
             return json.dumps({"error": "Missing 'bucket' or 'key' in request"}), 400
+
+        # Deduplication: Check if we've processed this image recently (within 60 seconds)
+        image_id = f"{bucket}/{key}"
+        current_time = time.time()
+        
+        if image_id in _processed_images:
+            last_processed = _processed_images[image_id]
+            if current_time - last_processed < 60:
+                print(f"Skipping duplicate request for {image_id} (processed {current_time - last_processed:.1f}s ago)")
+                return json.dumps({
+                    "status": "skipped",
+                    "reason": "duplicate_request",
+                    "image": key,
+                }), 200
+        
+        # Mark as processing
+        _processed_images[image_id] = current_time
+        
+        # Clean up old entries (keep only last 100)
+        if len(_processed_images) > 100:
+            sorted_items = sorted(_processed_images.items(), key=lambda x: x[1])
+            _processed_images.clear()
+            _processed_images.update(dict(sorted_items[-50:]))
 
         print(f"Processing image: s3://{bucket}/{key}")
 
@@ -147,18 +173,32 @@ def download_from_s3(bucket: str, key: str) -> bytes:
     s3_client = get_s3_client()
     
     # Check size first to prevent OOM
-    try:
-        head = s3_client.head_object(Bucket=bucket, Key=key)
-        size = head['ContentLength']
-        max_size = 10 * 1024 * 1024  # 10 MB
-        
-        if size > max_size:
-            raise ValueError(f"Image too large: {size} bytes (max {max_size} bytes)")
-        
-        print(f"Downloading image: {size} bytes")
-    except Exception as e:
-        print(f"Error checking image size: {e}")
-        raise
+    # Retry logic for eventual consistency (S3 might not be immediately available)
+    max_retries = 3
+    retry_delay = 1  # seconds
+    
+    for attempt in range(max_retries):
+        try:
+            head = s3_client.head_object(Bucket=bucket, Key=key)
+            size = head['ContentLength']
+            max_size = 10 * 1024 * 1024  # 10 MB
+            
+            if size > max_size:
+                raise ValueError(f"Image too large: {size} bytes (max {max_size} bytes)")
+            
+            print(f"Downloading image: {size} bytes")
+            break
+        except s3_client.exceptions.NoSuchKey:
+            if attempt < max_retries - 1:
+                print(f"Image not yet available, retrying in {retry_delay}s (attempt {attempt + 1}/{max_retries})")
+                time.sleep(retry_delay)
+                retry_delay *= 2  # Exponential backoff
+            else:
+                print(f"Error: Image not found after {max_retries} attempts")
+                raise
+        except Exception as e:
+            print(f"Error checking image size: {e}")
+            raise
     
     # Download the image
     response = s3_client.get_object(Bucket=bucket, Key=key)
@@ -169,7 +209,7 @@ def get_gemini_model():
     """Get or create cached Gemini model."""
     global _gemini_model
     if _gemini_model is None:
-        vertexai.init(project=GCP_PROJECT_ID, location=GCP_LOCATION)
+        aiplatform.init(project=GCP_PROJECT_ID, location=GCP_LOCATION)
         _gemini_model = GenerativeModel(
             "gemini-2.5-flash",
             generation_config={
