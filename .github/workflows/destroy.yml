@@ -115,33 +115,8 @@ jobs:
         run: rm -f /tmp/gcp-key.json
 
   # =========================================================================
-  # Step 3: Destroy Azure (in parallel with nothing, after GCP is gone)
+  # Step 3: Destroy Azure (after GCP is gone)
   # =========================================================================
-  destroy-aws-core:
-    name: "Destroy — AWS Storage & Website"
-    runs-on: ubuntu-latest
-    needs: [confirm, destroy-gcp]
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: hashicorp/setup-terraform@v3
-        with:
-          terraform_version: ${{ env.TF_VERSION }}
-          terraform_wrapper: false
-
-      - name: Terraform Init
-        working-directory: terraform/aws
-        run: terraform init
-
-      - name: Terraform Destroy
-        working-directory: terraform/aws
-        run: |
-          terraform destroy -auto-approve \
-            -var="project_prefix=${{ env.PROJECT_PREFIX }}" \
-            -var="aws_region=${{ env.AWS_REGION }}" \
-            -var="gcp_function_url=https://placeholder" \
-            -var="eventbridge_auth_token=placeholder"
-
   destroy-azure:
     name: "Destroy — Azure Email Service"
     runs-on: ubuntu-latest
