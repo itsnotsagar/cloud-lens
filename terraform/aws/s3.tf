@@ -38,6 +38,10 @@ resource "aws_s3_bucket_lifecycle_configuration" "images" {
     id     = "delete-old-images"
     status = "Enabled"
 
+    filter {
+      prefix = ""
+    }
+
     expiration {
       days = 1
     }
@@ -100,11 +104,11 @@ resource "aws_s3_bucket_policy" "website" {
 resource "aws_s3_object" "index_html" {
   bucket = aws_s3_bucket.website.id
   key    = "index.html"
-  content = templatefile("${path.module}/../src/frontend/index.html", {
+  content = templatefile("${path.module}/../../src/frontend/index.html", {
     api_gateway_url = aws_api_gateway_stage.prod.invoke_url
   })
   content_type = "text/html"
-  etag = md5(templatefile("${path.module}/../src/frontend/index.html", {
+  etag = md5(templatefile("${path.module}/../../src/frontend/index.html", {
     api_gateway_url = aws_api_gateway_stage.prod.invoke_url
   }))
 }
@@ -113,9 +117,9 @@ resource "aws_s3_object" "index_html" {
 resource "aws_s3_object" "styles_css" {
   bucket       = aws_s3_bucket.website.id
   key          = "styles.css"
-  source       = "${path.module}/../src/frontend/styles.css"
+  source       = "${path.module}/../../src/frontend/styles.css"
   content_type = "text/css"
-  etag         = filemd5("${path.module}/../src/frontend/styles.css")
+  etag         = filemd5("${path.module}/../../src/frontend/styles.css")
 }
 
 # Enable EventBridge notifications on S3 bucket

@@ -13,7 +13,7 @@ resource "google_storage_bucket" "function_source" {
 # Package the function source code as a zip
 data "archive_file" "classify_function" {
   type        = "zip"
-  source_dir  = "${path.module}/../src/classify-function"
+  source_dir  = "${path.module}/../../src/classify-function"
   output_path = "${path.root}/.build/classify-function.zip"
   excludes    = ["__pycache__", "*.pyc", ".DS_Store"]
 }
