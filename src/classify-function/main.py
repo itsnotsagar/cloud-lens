@@ -22,8 +22,11 @@ EXPECTED_AUTH_TOKEN = os.environ.get("EXPECTED_AUTH_TOKEN", "")
 # Secret Manager client (initialized once)
 secret_client = secretmanager.SecretManagerServiceClient()
 
-# Cache for secrets (avoid repeated API calls)
+# Cache for secrets and clients (avoid repeated API calls and initialization)
 _secrets_cache = {}
+_s3_client = None
+_email_client = None
+_gemini_model = None
 
 # Validate required environment variables at startup
 REQUIRED_ENV_VARS = [
@@ -116,26 +119,32 @@ def classify_image(request):
         return json.dumps({"error": str(e)}), 500
 
 
+def get_s3_client():
+    """Get or create cached S3 client."""
+    global _s3_client
+    if _s3_client is None:
+        aws_access_key_id = get_secret("imgclass-aws-access-key-id")
+        aws_secret_access_key = get_secret("imgclass-aws-secret-access-key")
+        
+        config = Config(
+            connect_timeout=10,
+            read_timeout=30,
+            retries={'max_attempts': 3, 'mode': 'standard'}
+        )
+        
+        _s3_client = boto3.client(
+            "s3",
+            aws_access_key_id=aws_access_key_id,
+            aws_secret_access_key=aws_secret_access_key,
+            region_name=AWS_REGION,
+            config=config
+        )
+    return _s3_client
+
+
 def download_from_s3(bucket: str, key: str) -> bytes:
     """Download an object from S3 and return its bytes."""
-    # Retrieve AWS credentials from Secret Manager
-    aws_access_key_id = get_secret("imgclass-aws-access-key-id")
-    aws_secret_access_key = get_secret("imgclass-aws-secret-access-key")
-    
-    # Configure boto3 with timeouts and retries
-    config = Config(
-        connect_timeout=10,
-        read_timeout=30,
-        retries={'max_attempts': 3, 'mode': 'standard'}
-    )
-    
-    s3_client = boto3.client(
-        "s3",
-        aws_access_key_id=aws_access_key_id,
-        aws_secret_access_key=aws_secret_access_key,
-        region_name=AWS_REGION,
-        config=config
-    )
+    s3_client = get_s3_client()
     
     # Check size first to prevent OOM
     try:
@@ -156,25 +165,26 @@ def download_from_s3(bucket: str, key: str) -> bytes:
     return response["Body"].read()
 
 
+def get_gemini_model():
+    """Get or create cached Gemini model."""
+    global _gemini_model
+    if _gemini_model is None:
+        vertexai.init(project=GCP_PROJECT_ID, location=GCP_LOCATION)
+        _gemini_model = GenerativeModel(
+            "gemini-2.5-flash",
+            generation_config={
+                "temperature": 0.4,
+                "max_output_tokens": 512,
+            }
+        )
+    return _gemini_model
+
+
 def classify_with_gemini(image_bytes: bytes, filename: str) -> str:
     """
     Send the image to Vertex AI Gemini for classification.
     Returns the classification result as a string.
     """
-    vertexai.init(project=GCP_PROJECT_ID, location=GCP_LOCATION)
-
-    # Use stable model version with fallback
-    try:
-        # Try gemini-pro-vision first (more widely available)
-        model = GenerativeModel("gemini-pro-vision")
-    except Exception as e:
-        print(f"Error initializing gemini-pro-vision, trying gemini-1.5-flash-001: {e}")
-        try:
-            model = GenerativeModel("gemini-1.5-flash-001")
-        except Exception as e2:
-            print(f"Error initializing gemini-1.5-flash-001: {e2}")
-            raise RuntimeError("Failed to initialize Gemini model") from e2
-
     # Determine MIME type from filename
     ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else "jpeg"
     mime_map = {"jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png", "webp": "image/webp"}
@@ -182,22 +192,25 @@ def classify_with_gemini(image_bytes: bytes, filename: str) -> str:
 
     image_part = Part.from_data(data=image_bytes, mime_type=mime_type)
 
-    prompt = """Analyze and classify this image. Provide your response in the following format:
-
-**Category:** [Main category of the image]
-**Subcategory:** [More specific classification]
+    prompt = """Classify this image with:
+**Category:** [main category]
+**Subcategory:** [specific type]
 **Confidence:** [High/Medium/Low]
-**Description:** [A brief 2-3 sentence description of what you see in the image]
-**Tags:** [Comma-separated relevant tags]
+**Description:** [2-3 sentences]
+**Tags:** [comma-separated tags]"""
 
-Be specific and accurate in your classification."""
+    model = get_gemini_model()
+    response = model.generate_content([image_part, prompt])
+    return response.text
 
-    try:
-        response = model.generate_content([image_part, prompt])
-        return response.text
-    except Exception as e:
-        print(f"Error generating classification: {e}")
-        raise RuntimeError("Failed to classify image with Gemini") from e
+
+def get_email_client():
+    """Get or create cached email client."""
+    global _email_client
+    if _email_client is None:
+        azure_email_conn_str = get_secret("imgclass-azure-email-connection-string")
+        _email_client = EmailClient.from_connection_string(azure_email_conn_str)
+    return _email_client
 
 
 def send_email(image_name: str, classification: str) -> bool:
@@ -209,11 +222,8 @@ def send_email(image_name: str, classification: str) -> bool:
         return False
 
     try:
-        # Retrieve Azure credentials from Secret Manager
-        azure_email_conn_str = get_secret("imgclass-azure-email-connection-string")
         azure_sender_address = get_secret("imgclass-azure-sender-address")
-        
-        email_client = EmailClient.from_connection_string(azure_email_conn_str)
+        email_client = get_email_client()
 
         message = {
             "senderAddress": azure_sender_address,
