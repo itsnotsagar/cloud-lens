@@ -3,7 +3,7 @@ terraform {
 
   backend "s3" {
     bucket  = "imgclass-tf-state-aws"
-    key     = "aws-trigger/terraform.tfstate"
+    key     = "aws/terraform.tfstate"
     region  = "us-east-1"
     encrypt = true
   }
@@ -21,5 +21,13 @@ terraform {
 }
 
 provider "aws" {
-  region = trimspace(var.aws_region)
+  region = var.aws_region
+
+  default_tags {
+    tags = {
+      Project     = var.project_prefix
+      Environment = var.environment
+      ManagedBy   = "terraform"
+    }
+  }
 }

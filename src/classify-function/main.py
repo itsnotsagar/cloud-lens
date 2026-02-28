@@ -1,4 +1,3 @@
-import base64
 import json
 import os
 import traceback
@@ -7,31 +6,79 @@ import boto3
 import functions_framework
 import vertexai
 from azure.communication.email import EmailClient
-from google.cloud import aiplatform
-from vertexai.generative_models import GenerativeModel, Image, Part
+from botocore.config import Config
+from google.cloud import secretmanager
+from vertexai.generative_models import GenerativeModel, Part
 
 
-# Environment variables
-AWS_ACCESS_KEY_ID = os.environ.get("AWS_ACCESS_KEY_ID_VALUE", "")
-AWS_SECRET_ACCESS_KEY = os.environ.get("AWS_SECRET_ACCESS_KEY_VALUE", "")
-AWS_REGION = os.environ.get("AWS_REGION_VALUE", "us-east-1")
+# Environment variables (non-sensitive)
 S3_BUCKET_NAME = os.environ.get("S3_BUCKET_NAME", "")
-AZURE_EMAIL_CONN_STR = os.environ.get("AZURE_EMAIL_CONNECTION_STR", "")
-AZURE_SENDER_ADDRESS = os.environ.get("AZURE_SENDER_ADDRESS", "")
+AWS_REGION = os.environ.get("AWS_REGION", "us-east-1")
 NOTIFICATION_EMAIL = os.environ.get("NOTIFICATION_EMAIL", "")
 GCP_PROJECT_ID = os.environ.get("GCP_PROJECT_ID", "")
 GCP_LOCATION = os.environ.get("GCP_LOCATION", "us-central1")
+EXPECTED_AUTH_TOKEN = os.environ.get("EXPECTED_AUTH_TOKEN", "")
+
+# Secret Manager client (initialized once)
+secret_client = secretmanager.SecretManagerServiceClient()
+
+# Cache for secrets (avoid repeated API calls)
+_secrets_cache = {}
+
+# Validate required environment variables at startup
+REQUIRED_ENV_VARS = [
+    "S3_BUCKET_NAME",
+    "AWS_REGION",
+    "NOTIFICATION_EMAIL",
+    "GCP_PROJECT_ID",
+    "GCP_LOCATION",
+    "EXPECTED_AUTH_TOKEN"
+]
+
+def validate_environment():
+    """Validate all required environment variables are set."""
+    missing = [var for var in REQUIRED_ENV_VARS if not os.environ.get(var)]
+    if missing:
+        raise RuntimeError(f"Missing required environment variables: {', '.join(missing)}")
+
+# Validate at module load time
+validate_environment()
+
+
+def get_secret(secret_id: str) -> str:
+    """
+    Retrieve a secret from GCP Secret Manager with caching.
+    """
+    if secret_id in _secrets_cache:
+        return _secrets_cache[secret_id]
+
+    name = f"projects/{GCP_PROJECT_ID}/secrets/{secret_id}/versions/latest"
+    try:
+        response = secret_client.access_secret_version(request={"name": name})
+        secret_value = response.payload.data.decode("UTF-8")
+        _secrets_cache[secret_id] = secret_value
+        return secret_value
+    except Exception as e:
+        print(f"CRITICAL: Error retrieving secret {secret_id}: {e}")
+        print(f"Ensure secret exists and service account has secretmanager.secretAccessor role")
+        raise RuntimeError(f"Failed to retrieve secret {secret_id}") from e
 
 
 @functions_framework.http
 def classify_image(request):
     """
     HTTP Cloud Function that:
-    1. Downloads an image from S3
-    2. Classifies it using Vertex AI Gemini
-    3. Sends the results via Azure Communication Services email
+    1. Validates authentication token
+    2. Downloads an image from S3
+    3. Classifies it using Vertex AI Gemini
+    4. Sends the results via Azure Communication Services email
     """
     try:
+        # Step 0: Verify authentication
+        auth_header = request.headers.get("X-Auth-Token", "")
+        if not auth_header or auth_header != EXPECTED_AUTH_TOKEN:
+            print("Unauthorized access attempt")
+            return json.dumps({"error": "Unauthorized"}), 401
         # Parse the incoming request
         request_json = request.get_json(silent=True)
         if not request_json:
@@ -71,12 +118,40 @@ def classify_image(request):
 
 def download_from_s3(bucket: str, key: str) -> bytes:
     """Download an object from S3 and return its bytes."""
+    # Retrieve AWS credentials from Secret Manager
+    aws_access_key_id = get_secret("imgclass-aws-access-key-id")
+    aws_secret_access_key = get_secret("imgclass-aws-secret-access-key")
+    
+    # Configure boto3 with timeouts and retries
+    config = Config(
+        connect_timeout=10,
+        read_timeout=30,
+        retries={'max_attempts': 3, 'mode': 'standard'}
+    )
+    
     s3_client = boto3.client(
         "s3",
-        aws_access_key_id=AWS_ACCESS_KEY_ID,
-        aws_secret_access_key=AWS_SECRET_ACCESS_KEY,
+        aws_access_key_id=aws_access_key_id,
+        aws_secret_access_key=aws_secret_access_key,
         region_name=AWS_REGION,
+        config=config
     )
+    
+    # Check size first to prevent OOM
+    try:
+        head = s3_client.head_object(Bucket=bucket, Key=key)
+        size = head['ContentLength']
+        max_size = 10 * 1024 * 1024  # 10 MB
+        
+        if size > max_size:
+            raise ValueError(f"Image too large: {size} bytes (max {max_size} bytes)")
+        
+        print(f"Downloading image: {size} bytes")
+    except Exception as e:
+        print(f"Error checking image size: {e}")
+        raise
+    
+    # Download the image
     response = s3_client.get_object(Bucket=bucket, Key=key)
     return response["Body"].read()
 
@@ -88,7 +163,12 @@ def classify_with_gemini(image_bytes: bytes, filename: str) -> str:
     """
     vertexai.init(project=GCP_PROJECT_ID, location=GCP_LOCATION)
 
-    model = GenerativeModel("gemini-2.0-flash")
+    # Use stable model version with fallback
+    try:
+        model = GenerativeModel("gemini-1.5-flash")
+    except Exception as e:
+        print(f"Error initializing Gemini model: {e}")
+        raise RuntimeError("Failed to initialize Gemini model") from e
 
     # Determine MIME type from filename
     ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else "jpeg"
@@ -107,24 +187,31 @@ def classify_with_gemini(image_bytes: bytes, filename: str) -> str:
 
 Be specific and accurate in your classification."""
 
-    response = model.generate_content([image_part, prompt])
-
-    return response.text
+    try:
+        response = model.generate_content([image_part, prompt])
+        return response.text
+    except Exception as e:
+        print(f"Error generating classification: {e}")
+        raise RuntimeError("Failed to classify image with Gemini") from e
 
 
 def send_email(image_name: str, classification: str) -> bool:
     """
     Send classification results via Azure Communication Services Email.
     """
-    if not AZURE_EMAIL_CONN_STR or not NOTIFICATION_EMAIL:
+    if not NOTIFICATION_EMAIL:
         print("Email not configured — skipping email send")
         return False
 
     try:
-        email_client = EmailClient.from_connection_string(AZURE_EMAIL_CONN_STR)
+        # Retrieve Azure credentials from Secret Manager
+        azure_email_conn_str = get_secret("imgclass-azure-email-connection-string")
+        azure_sender_address = get_secret("imgclass-azure-sender-address")
+        
+        email_client = EmailClient.from_connection_string(azure_email_conn_str)
 
         message = {
-            "senderAddress": AZURE_SENDER_ADDRESS,
+            "senderAddress": azure_sender_address,
             "recipients": {
                 "to": [{"address": NOTIFICATION_EMAIL}]
             },

@@ -4,6 +4,12 @@ variable "project_prefix" {
   default     = "imgclass"
 }
 
+variable "environment" {
+  description = "Environment name"
+  type        = string
+  default     = "production"
+}
+
 variable "azure_location" {
   description = "Azure region for deployment"
   type        = string
