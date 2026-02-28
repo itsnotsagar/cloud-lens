@@ -38,7 +38,16 @@ resource "aws_lambda_permission" "cors_apigw" {
 }
 
 # CloudWatch Logs retention for CORS Lambda
+# Note: Lambda automatically creates this log group, we just set retention
 resource "aws_cloudwatch_log_group" "cors_lambda" {
   name              = "/aws/lambda/${aws_lambda_function.cors.function_name}"
   retention_in_days = 7
+
+  lifecycle {
+    prevent_destroy       = false
+    ignore_changes        = [name]
+    create_before_destroy = false
+  }
+
+  depends_on = [aws_lambda_function.cors]
 }
