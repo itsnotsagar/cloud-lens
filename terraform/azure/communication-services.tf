@@ -7,7 +7,9 @@ resource "azurerm_resource_group" "main" {
   location = var.azure_location
 
   tags = {
-    Project = var.project_prefix
+    Project     = var.project_prefix
+    Environment = var.environment
+    ManagedBy   = "terraform"
   }
 }
 
@@ -18,7 +20,9 @@ resource "azurerm_communication_service" "main" {
   data_location       = "United States"
 
   tags = {
-    Project = var.project_prefix
+    Project     = var.project_prefix
+    Environment = var.environment
+    ManagedBy   = "terraform"
   }
 }
 
@@ -29,7 +33,9 @@ resource "azurerm_email_communication_service" "main" {
   data_location       = "United States"
 
   tags = {
-    Project = var.project_prefix
+    Project     = var.project_prefix
+    Environment = var.environment
+    ManagedBy   = "terraform"
   }
 }
 

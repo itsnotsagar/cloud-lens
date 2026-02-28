@@ -11,10 +11,6 @@ resource "aws_api_gateway_rest_api" "main" {
   endpoint_configuration {
     types = ["REGIONAL"]
   }
-
-  tags = {
-    Project = var.project_prefix
-  }
 }
 
 # /upload resource
@@ -39,7 +35,7 @@ resource "aws_api_gateway_method" "put_upload" {
   authorization = "NONE"
 
   request_parameters = {
-    "method.request.path.filename"    = true
+    "method.request.path.filename"       = true
     "method.request.header.Content-Type" = false
   }
 }
@@ -55,7 +51,7 @@ resource "aws_api_gateway_integration" "put_s3" {
   credentials             = aws_iam_role.api_gateway_s3.arn
 
   request_parameters = {
-    "integration.request.path.filename"    = "method.request.path.filename"
+    "integration.request.path.filename"       = "method.request.path.filename"
     "integration.request.header.Content-Type" = "method.request.header.Content-Type"
   }
 }
@@ -87,67 +83,8 @@ resource "aws_api_gateway_integration_response" "put_200" {
 }
 
 # =============================================================================
-# CORS: Lambda-backed OPTIONS (MOCK is broken with binary_media_types)
+# CORS: Lambda-backed OPTIONS
 # =============================================================================
-
-data "archive_file" "cors_lambda" {
-  type                    = "zip"
-  source_content          = <<-PYTHON
-def handler(event, context):
-    return {
-        "statusCode": 200,
-        "headers": {
-            "Access-Control-Allow-Origin": "*",
-            "Access-Control-Allow-Methods": "PUT,OPTIONS",
-            "Access-Control-Allow-Headers": "Content-Type,Accept,X-Amz-Date,Authorization,X-Api-Key",
-        },
-        "body": "",
-    }
-PYTHON
-  source_content_filename = "cors.py"
-  output_path             = "${path.module}/../../.build/cors_lambda.zip"
-}
-
-resource "aws_iam_role" "cors_lambda" {
-  name = "${var.project_prefix}-cors-lambda-role"
-
-  assume_role_policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [{
-      Action = "sts:AssumeRole"
-      Effect = "Allow"
-      Principal = {
-        Service = "lambda.amazonaws.com"
-      }
-    }]
-  })
-
-  tags = { Project = var.project_prefix }
-}
-
-resource "aws_iam_role_policy_attachment" "cors_lambda_basic" {
-  role       = aws_iam_role.cors_lambda.name
-  policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
-}
-
-resource "aws_lambda_function" "cors" {
-  function_name    = "${var.project_prefix}-cors"
-  role             = aws_iam_role.cors_lambda.arn
-  handler          = "cors.handler"
-  runtime          = "python3.11"
-  filename         = data.archive_file.cors_lambda.output_path
-  source_code_hash = data.archive_file.cors_lambda.output_base64sha256
-
-  tags = { Project = var.project_prefix }
-}
-
-resource "aws_lambda_permission" "cors_apigw" {
-  statement_id  = "AllowAPIGatewayInvoke"
-  action        = "lambda:InvokeFunction"
-  function_name = aws_lambda_function.cors.function_name
-  principal     = "apigateway.amazonaws.com"
-  source_arn    = "${aws_api_gateway_rest_api.main.execution_arn}/*/*"
-}
 
 resource "aws_api_gateway_method" "options_upload" {
   rest_api_id   = aws_api_gateway_rest_api.main.id
@@ -166,7 +103,7 @@ resource "aws_api_gateway_integration" "options_upload" {
 }
 
 # =============================================================================
-# Gateway Responses — ensure CORS headers on ALL responses (including errors)
+# Gateway Responses — ensure CORS headers on ALL responses
 # =============================================================================
 
 resource "aws_api_gateway_gateway_response" "default_4xx" {
@@ -199,16 +136,16 @@ resource "aws_api_gateway_deployment" "main" {
   rest_api_id = aws_api_gateway_rest_api.main.id
 
   triggers = {
+    # Only trigger redeployment when actual API configuration changes
     redeployment = sha1(jsonencode([
-      aws_api_gateway_method.put_upload,
-      aws_api_gateway_integration.put_s3,
-      aws_api_gateway_method_response.put_200,
-      aws_api_gateway_integration_response.put_200,
-      aws_api_gateway_method.options_upload,
-      aws_api_gateway_integration.options_upload,
-      aws_lambda_function.cors,
-      aws_api_gateway_gateway_response.default_4xx,
-      aws_api_gateway_gateway_response.default_5xx,
+      aws_api_gateway_method.put_upload.id,
+      aws_api_gateway_integration.put_s3.id,
+      aws_api_gateway_method_response.put_200.id,
+      aws_api_gateway_integration_response.put_200.id,
+      aws_api_gateway_method.options_upload.id,
+      aws_api_gateway_integration.options_upload.id,
+      aws_api_gateway_gateway_response.default_4xx.id,
+      aws_api_gateway_gateway_response.default_5xx.id,
     ]))
   }
 
@@ -230,8 +167,4 @@ resource "aws_api_gateway_stage" "prod" {
   deployment_id = aws_api_gateway_deployment.main.id
   rest_api_id   = aws_api_gateway_rest_api.main.id
   stage_name    = "prod"
-
-  tags = {
-    Project = var.project_prefix
-  }
 }

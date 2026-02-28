@@ -4,11 +4,6 @@
 
 resource "aws_s3_bucket" "images" {
   bucket = "${var.project_prefix}-images-${data.aws_caller_identity.current.account_id}"
-
-  tags = {
-    Name    = "${var.project_prefix}-images"
-    Project = var.project_prefix
-  }
 }
 
 resource "aws_s3_bucket_cors_configuration" "images" {
@@ -32,7 +27,30 @@ resource "aws_s3_bucket_public_access_block" "images" {
   restrict_public_buckets = true
 }
 
-data "aws_caller_identity" "current" {}
+# =============================================================================
+# S3 Lifecycle Policy - Auto-delete images after 1 day
+# =============================================================================
+
+resource "aws_s3_bucket_lifecycle_configuration" "images" {
+  bucket = aws_s3_bucket.images.id
+
+  rule {
+    id     = "delete-old-images"
+    status = "Enabled"
+
+    filter {
+      prefix = ""
+    }
+
+    expiration {
+      days = 1
+    }
+
+    noncurrent_version_expiration {
+      noncurrent_days = 1
+    }
+  }
+}
 
 # =============================================================================
 # S3 Static Website Bucket
@@ -40,11 +58,6 @@ data "aws_caller_identity" "current" {}
 
 resource "aws_s3_bucket" "website" {
   bucket = "${var.project_prefix}-website-${data.aws_caller_identity.current.account_id}"
-
-  tags = {
-    Name    = "${var.project_prefix}-website"
-    Project = var.project_prefix
-  }
 }
 
 resource "aws_s3_bucket_website_configuration" "website" {
@@ -98,4 +111,19 @@ resource "aws_s3_object" "index_html" {
   etag = md5(templatefile("${path.module}/../../src/frontend/index.html", {
     api_gateway_url = aws_api_gateway_stage.prod.invoke_url
   }))
+}
+
+# Upload the CSS file
+resource "aws_s3_object" "styles_css" {
+  bucket       = aws_s3_bucket.website.id
+  key          = "styles.css"
+  source       = "${path.module}/../../src/frontend/styles.css"
+  content_type = "text/css"
+  etag         = filemd5("${path.module}/../../src/frontend/styles.css")
+}
+
+# Enable EventBridge notifications on S3 bucket
+resource "aws_s3_bucket_notification" "eventbridge" {
+  bucket      = aws_s3_bucket.images.id
+  eventbridge = true
 }

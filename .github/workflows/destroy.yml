@@ -44,10 +44,10 @@ jobs:
           echo "✓ Destruction confirmed."
 
   # =========================================================================
-  # Step 1: Destroy AWS Trigger (depends on nothing downstream)
+  # Step 1: Destroy AWS EventBridge (depends on nothing downstream)
   # =========================================================================
-  destroy-aws-trigger:
-    name: "Destroy — AWS Event Trigger"
+  destroy-aws:
+    name: "Destroy — AWS Infrastructure"
     runs-on: ubuntu-latest
     needs: confirm
     steps:
@@ -59,26 +59,25 @@ jobs:
           terraform_wrapper: false
 
       - name: Terraform Init
-        working-directory: terraform/aws-trigger
+        working-directory: terraform/aws
         run: terraform init
 
       - name: Terraform Destroy
-        working-directory: terraform/aws-trigger
+        working-directory: terraform/aws
         run: |
           terraform destroy -auto-approve \
             -var="project_prefix=${{ env.PROJECT_PREFIX }}" \
             -var="aws_region=${{ env.AWS_REGION }}" \
-            -var="image_bucket_name=placeholder" \
-            -var="image_bucket_arn=arn:aws:s3:::placeholder" \
-            -var="gcp_function_url=https://placeholder"
+            -var="gcp_function_url=https://placeholder" \
+            -var="eventbridge_auth_token=placeholder"
 
   # =========================================================================
-  # Step 2: Destroy GCP (after aws-trigger is gone)
+  # Step 2: Destroy GCP (after AWS is gone)
   # =========================================================================
   destroy-gcp:
     name: "Destroy — GCP Classification Function"
     runs-on: ubuntu-latest
-    needs: [confirm, destroy-aws-trigger]
+    needs: [confirm, destroy-aws]
     steps:
       - uses: actions/checkout@v4
 
@@ -116,31 +115,8 @@ jobs:
         run: rm -f /tmp/gcp-key.json
 
   # =========================================================================
-  # Step 3: Destroy AWS Core and Azure (in parallel, after GCP is gone)
+  # Step 3: Destroy Azure (after GCP is gone)
   # =========================================================================
-  destroy-aws-core:
-    name: "Destroy — AWS Storage & Website"
-    runs-on: ubuntu-latest
-    needs: [confirm, destroy-gcp]
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: hashicorp/setup-terraform@v3
-        with:
-          terraform_version: ${{ env.TF_VERSION }}
-          terraform_wrapper: false
-
-      - name: Terraform Init
-        working-directory: terraform/aws-core
-        run: terraform init
-
-      - name: Terraform Destroy
-        working-directory: terraform/aws-core
-        run: |
-          terraform destroy -auto-approve \
-            -var="project_prefix=${{ env.PROJECT_PREFIX }}" \
-            -var="aws_region=${{ env.AWS_REGION }}"
-
   destroy-azure:
     name: "Destroy — Azure Email Service"
     runs-on: ubuntu-latest
@@ -171,7 +147,7 @@ jobs:
   summary:
     name: "Destruction Summary"
     runs-on: ubuntu-latest
-    needs: [destroy-aws-trigger, destroy-gcp, destroy-aws-core, destroy-azure]
+    needs: [destroy-aws, destroy-gcp, destroy-azure]
     if: always()
     steps:
       - name: Print Summary
@@ -180,9 +156,8 @@ jobs:
           echo "" >> "$GITHUB_STEP_SUMMARY"
           echo "| Component | Cloud | Status |" >> "$GITHUB_STEP_SUMMARY"
           echo "|-----------|-------|--------|" >> "$GITHUB_STEP_SUMMARY"
-          echo "| Event Trigger | AWS | ${{ needs.destroy-aws-trigger.result }} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| All Resources | AWS | ${{ needs.destroy-aws.result }} |" >> "$GITHUB_STEP_SUMMARY"
           echo "| Classification Function | GCP | ${{ needs.destroy-gcp.result }} |" >> "$GITHUB_STEP_SUMMARY"
-          echo "| Storage & Website | AWS | ${{ needs.destroy-aws-core.result }} |" >> "$GITHUB_STEP_SUMMARY"
           echo "| Email Service | Azure | ${{ needs.destroy-azure.result }} |" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
           echo "> **Note:** State backends (S3, GCS, Azure Storage) were NOT destroyed." >> "$GITHUB_STEP_SUMMARY"
