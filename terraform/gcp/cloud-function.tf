@@ -50,6 +50,10 @@ resource "google_cloudfunctions2_function" "classify" {
     min_instance_count = 0
     available_memory   = "512Mi"
     timeout_seconds    = 120
+    
+    # Allow unauthenticated invocations (we handle auth in the function code)
+    ingress_settings               = "ALLOW_ALL"
+    all_traffic_on_latest_revision = true
 
     # Service account with Secret Manager access
     service_account_email = google_service_account.function.email
