@@ -79,8 +79,8 @@ resource "aws_cloudwatch_event_target" "gcp_function" {
   }
 
   retry_policy {
-    maximum_retry_attempts       = 3
-    maximum_event_age_in_seconds = 300 # 5 minutes
+    maximum_retry_attempts       = 2  # Reduced from 3 - faster failure detection
+    maximum_event_age_in_seconds = 180 # Reduced from 300s (3 minutes)
   }
 
   dead_letter_config {
@@ -95,4 +95,13 @@ resource "aws_cloudwatch_event_target" "gcp_function" {
 resource "aws_sqs_queue" "eventbridge_dlq" {
   name                      = "${var.project_prefix}-eventbridge-dlq"
   message_retention_seconds = 1209600 # 14 days
+}
+
+# =============================================================================
+# CloudWatch Log Group for EventBridge (optional but recommended)
+# =============================================================================
+
+resource "aws_cloudwatch_log_group" "eventbridge" {
+  name              = "/aws/events/${var.project_prefix}-s3-upload-rule"
+  retention_in_days = 7
 }

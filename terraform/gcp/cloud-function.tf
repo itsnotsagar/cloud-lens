@@ -48,8 +48,9 @@ resource "google_cloudfunctions2_function" "classify" {
   service_config {
     max_instance_count = 10
     min_instance_count = 0
-    available_memory   = "512Mi"
-    timeout_seconds    = 120
+    available_memory   = "256Mi"  # Reduced from 512Mi - sufficient for this workload
+    timeout_seconds    = 60       # Reduced from 120s - typical execution is ~10-15s
+    max_instance_request_concurrency = 1  # Process one request at a time per instance
     
     # Allow unauthenticated invocations (we handle auth in the function code)
     ingress_settings               = "ALLOW_ALL"

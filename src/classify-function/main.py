@@ -91,7 +91,6 @@ def classify_image(request):
 
         bucket = request_json.get("bucket", S3_BUCKET_NAME)
         key = request_json.get("key", "")
-        timestamp = request_json.get("timestamp", "")
 
         if not bucket or not key:
             return json.dumps({"error": "Missing 'bucket' or 'key' in request"}), 400
@@ -123,11 +122,10 @@ def classify_image(request):
 
         # Step 1: Download the image from S3
         image_bytes = download_from_s3(bucket, key)
-        print(f"Downloaded {len(image_bytes)} bytes from S3")
 
         # Step 2: Classify using Vertex AI Gemini
         classification_result = classify_with_gemini(image_bytes, key)
-        print(f"Classification result: {classification_result}")
+        print(f"Classification: {classification_result[:100]}...")  # Log first 100 chars only
 
         # Step 3: Send email via Azure Communication Services
         email_sent = send_email(key, classification_result)
@@ -172,22 +170,26 @@ def download_from_s3(bucket: str, key: str) -> bytes:
     """Download an object from S3 and return its bytes."""
     s3_client = get_s3_client()
     
-    # Check size first to prevent OOM
     # Retry logic for eventual consistency (S3 might not be immediately available)
-    max_retries = 3
-    retry_delay = 1  # seconds
+    max_retries = 2
+    retry_delay = 0.5  # seconds
     
     for attempt in range(max_retries):
         try:
-            head = s3_client.head_object(Bucket=bucket, Key=key)
-            size = head['ContentLength']
+            # Download directly without head request (saves one API call)
+            response = s3_client.get_object(Bucket=bucket, Key=key)
+            image_bytes = response["Body"].read()
+            
+            # Validate size after download
+            size = len(image_bytes)
             max_size = 10 * 1024 * 1024  # 10 MB
             
             if size > max_size:
                 raise ValueError(f"Image too large: {size} bytes (max {max_size} bytes)")
             
-            print(f"Downloading image: {size} bytes")
-            break
+            print(f"Downloaded {size} bytes from S3")
+            return image_bytes
+            
         except s3_client.exceptions.NoSuchKey:
             if attempt < max_retries - 1:
                 print(f"Image not yet available, retrying in {retry_delay}s (attempt {attempt + 1}/{max_retries})")
@@ -197,12 +199,8 @@ def download_from_s3(bucket: str, key: str) -> bytes:
                 print(f"Error: Image not found after {max_retries} attempts")
                 raise
         except Exception as e:
-            print(f"Error checking image size: {e}")
+            print(f"Error downloading image: {e}")
             raise
-    
-    # Download the image
-    response = s3_client.get_object(Bucket=bucket, Key=key)
-    return response["Body"].read()
 
 
 def get_gemini_model():
@@ -271,33 +269,17 @@ def send_email(image_name: str, classification: str) -> bool:
                 "to": [{"address": NOTIFICATION_EMAIL}]
             },
             "content": {
-                "subject": f"Image Classification Result: {image_name}",
-                "html": f"""
-                <html>
-                <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; background: #f8fafc;">
-                    <div style="background: white; border-radius: 12px; padding: 24px; border: 1px solid #e2e8f0;">
-                        <h2 style="color: #1e293b; margin-top: 0;">Image Classification Result</h2>
-
-                        <div style="background: #f1f5f9; border-radius: 8px; padding: 12px; margin-bottom: 16px;">
-                            <strong style="color: #64748b; font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em;">Image</strong>
-                            <p style="margin: 4px 0 0; color: #334155; font-weight: 500;">{image_name}</p>
-                        </div>
-
-                        <div style="background: #f1f5f9; border-radius: 8px; padding: 16px; margin-bottom: 16px;">
-                            <strong style="color: #64748b; font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em;">Classification</strong>
-                            <div style="margin-top: 8px; color: #334155; white-space: pre-wrap; line-height: 1.6;">{classification}</div>
-                        </div>
-
-                        <div style="border-top: 1px solid #e2e8f0; padding-top: 16px; margin-top: 16px;">
-                            <p style="color: #94a3b8; font-size: 12px; margin: 0;">
-                                Multi-Cloud Image Classification Pipeline<br/>
-                                Storage: AWS S3 &bull; Classification: GCP Vertex AI (Gemini) &bull; Email: Azure Communication Services
-                            </p>
-                        </div>
-                    </div>
-                </body>
-                </html>
-                """,
+                "subject": f"Image Classification: {image_name}",
+                "html": f"""<html><body style="font-family:sans-serif;max-width:600px;margin:0 auto;padding:20px">
+<h2>Image Classification Result</h2>
+<div style="background:#f5f5f5;padding:15px;border-radius:8px;margin:15px 0">
+<strong>Image:</strong> {image_name}
+</div>
+<div style="background:#f5f5f5;padding:15px;border-radius:8px;margin:15px 0">
+<strong>Classification:</strong><br><pre style="white-space:pre-wrap;margin:10px 0">{classification}</pre>
+</div>
+<p style="color:#666;font-size:12px;margin-top:20px">Multi-Cloud Pipeline: AWS S3 → GCP Vertex AI → Azure Email</p>
+</body></html>""",
                 "plainText": f"Image: {image_name}\n\nClassification:\n{classification}\n\n---\nMulti-Cloud Image Classification Pipeline",
             },
         }
