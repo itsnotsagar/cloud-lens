@@ -34,7 +34,7 @@ resource "aws_lambda_function" "cors" {
 
   environment {
     variables = {
-      ALLOWED_ORIGIN = "https://${aws_s3_bucket_website_configuration.website.website_endpoint}"
+      ALLOWED_ORIGIN = "http://${aws_s3_bucket_website_configuration.website.website_endpoint}"
     }
   }
 }

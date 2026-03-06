@@ -77,7 +77,7 @@ resource "aws_api_gateway_integration_response" "put_200" {
   status_code = aws_api_gateway_method_response.put_200.status_code
 
   response_parameters = {
-    "method.response.header.Access-Control-Allow-Origin" = "'https://${aws_s3_bucket_website_configuration.website.website_endpoint}'"
+    "method.response.header.Access-Control-Allow-Origin" = "'http://${aws_s3_bucket_website_configuration.website.website_endpoint}'"
   }
 
   depends_on = [aws_api_gateway_integration.put_s3]
@@ -112,7 +112,7 @@ resource "aws_api_gateway_gateway_response" "default_4xx" {
   response_type = "DEFAULT_4XX"
 
   response_parameters = {
-    "gatewayresponse.header.Access-Control-Allow-Origin"  = "'https://${aws_s3_bucket_website_configuration.website.website_endpoint}'"
+    "gatewayresponse.header.Access-Control-Allow-Origin"  = "'http://${aws_s3_bucket_website_configuration.website.website_endpoint}'"
     "gatewayresponse.header.Access-Control-Allow-Headers" = "'Content-Type,Accept,X-Amz-Date,Authorization,X-Api-Key'"
     "gatewayresponse.header.Access-Control-Allow-Methods" = "'PUT,OPTIONS'"
   }
@@ -123,7 +123,7 @@ resource "aws_api_gateway_gateway_response" "default_5xx" {
   response_type = "DEFAULT_5XX"
 
   response_parameters = {
-    "gatewayresponse.header.Access-Control-Allow-Origin"  = "'https://${aws_s3_bucket_website_configuration.website.website_endpoint}'"
+    "gatewayresponse.header.Access-Control-Allow-Origin"  = "'http://${aws_s3_bucket_website_configuration.website.website_endpoint}'"
     "gatewayresponse.header.Access-Control-Allow-Headers" = "'Content-Type,Accept,X-Amz-Date,Authorization,X-Api-Key'"
     "gatewayresponse.header.Access-Control-Allow-Methods" = "'PUT,OPTIONS'"
   }

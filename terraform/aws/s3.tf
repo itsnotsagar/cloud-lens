@@ -31,7 +31,7 @@ resource "aws_s3_bucket_cors_configuration" "images" {
   cors_rule {
     allowed_headers = ["Content-Type", "Accept", "X-Amz-Date", "Authorization", "X-Api-Key"]
     allowed_methods = ["PUT"]
-    allowed_origins = ["https://${aws_s3_bucket_website_configuration.website.website_endpoint}"]
+    allowed_origins = ["http://${aws_s3_bucket_website_configuration.website.website_endpoint}"]
     expose_headers  = ["ETag"]
     max_age_seconds = 3000
   }
