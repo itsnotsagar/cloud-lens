@@ -82,21 +82,6 @@ resource "aws_cloudwatch_event_target" "gcp_function" {
     maximum_retry_attempts       = 2   # Reduced from 3 - faster failure detection
     maximum_event_age_in_seconds = 180 # Reduced from 300s (3 minutes)
   }
-
-  dead_letter_config {
-    arn = aws_sqs_queue.eventbridge_dlq.arn
-  }
-}
-
-# =============================================================================
-# Dead Letter Queue for failed events
-# =============================================================================
-
-resource "aws_sqs_queue" "eventbridge_dlq" {
-  name                              = "${var.project_prefix}-eventbridge-dlq"
-  message_retention_seconds         = 1209600 # 14 days
-  kms_master_key_id                 = "alias/aws/sqs"
-  kms_data_key_reuse_period_seconds = 300
 }
 
 # =============================================================================
