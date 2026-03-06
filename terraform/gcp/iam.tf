@@ -23,20 +23,16 @@ resource "google_project_iam_member" "function_vertex_ai" {
 }
 
 # =============================================================================
-# Service Account for EventBridge API Destination
+# Allow unauthenticated invocations (auth handled by X-Auth-Token in app code)
+# EventBridge API Destinations cannot present GCP identity tokens, so Cloud Run
+# must allow the request through. The function validates X-Auth-Token via
+# Secret Manager + hmac.compare_digest.
 # =============================================================================
 
-resource "google_service_account" "eventbridge_invoker" {
-  account_id   = "${var.project_prefix}-eventbridge-sa"
-  display_name = "Service Account for EventBridge to invoke Cloud Function"
-  description  = "Used by AWS EventBridge API Destination to authenticate"
-}
-
-# Grant the EventBridge service account permission to invoke the function
-resource "google_cloud_run_v2_service_iam_member" "allow_eventbridge" {
+resource "google_cloud_run_v2_service_iam_member" "allow_unauthenticated" {
   project  = var.gcp_project_id
   location = var.gcp_region
   name     = google_cloudfunctions2_function.classify.name
   role     = "roles/run.invoker"
-  member   = "serviceAccount:${google_service_account.eventbridge_invoker.email}"
+  member   = "allUsers"
 }
