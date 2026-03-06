@@ -271,7 +271,6 @@ def classify_with_gemini(image_bytes: bytes, filename: str) -> str:
     model = get_gemini_model()
     response = model.generate_content(
         [image_part, prompt],
-        timeout=55,  # Slightly under function's 60s timeout
     )
     return response.text
 
