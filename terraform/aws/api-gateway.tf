@@ -169,6 +169,8 @@ resource "aws_api_gateway_stage" "prod" {
   rest_api_id   = aws_api_gateway_rest_api.main.id
   stage_name    = "prod"
 
+  depends_on = [aws_api_gateway_account.main]
+
   access_log_settings {
     destination_arn = aws_cloudwatch_log_group.api_gateway_access.arn
     format = jsonencode({
