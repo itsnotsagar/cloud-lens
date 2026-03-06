@@ -18,11 +18,6 @@ output "gcp_region" {
   value       = var.gcp_region
 }
 
-output "eventbridge_service_account_email" {
-  description = "Service account email for EventBridge authentication"
-  value       = google_service_account.eventbridge_invoker.email
-}
-
 output "eventbridge_auth_token" {
   description = "EventBridge authentication token (sensitive)"
   value       = random_password.eventbridge_auth_token.result
