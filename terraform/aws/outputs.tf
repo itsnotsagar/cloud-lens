@@ -18,6 +18,12 @@ output "api_gateway_invoke_url" {
   value       = aws_api_gateway_stage.prod.invoke_url
 }
 
+output "api_gateway_api_key" {
+  description = "API key for the frontend to authenticate with API Gateway"
+  value       = aws_api_gateway_api_key.frontend.value
+  sensitive   = true
+}
+
 output "aws_region" {
   description = "AWS region"
   value       = var.aws_region

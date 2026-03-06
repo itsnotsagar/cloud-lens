@@ -8,6 +8,10 @@ resource "google_storage_bucket" "function_source" {
   force_destroy = true
 
   uniform_bucket_level_access = true
+
+  versioning {
+    enabled = true
+  }
 }
 
 # Package the function source code as a zip
@@ -46,12 +50,13 @@ resource "google_cloudfunctions2_function" "classify" {
   }
 
   service_config {
-    max_instance_count = 10
-    min_instance_count = 0
-    available_memory   = "512Mi"
-    timeout_seconds    = 120
-    
-    # Allow unauthenticated invocations (we handle auth in the function code)
+    max_instance_count               = 10
+    min_instance_count               = 0
+    available_memory                 = "512Mi" # vertexai + boto3 + secretmanager need headroom for cold starts
+    timeout_seconds                  = 60      # Reduced from 120s - typical execution is ~10-15s
+    max_instance_request_concurrency = 1       # Process one request at a time per instance
+
+    # Service-to-service authentication required
     ingress_settings               = "ALLOW_ALL"
     all_traffic_on_latest_revision = true
 
@@ -59,12 +64,12 @@ resource "google_cloudfunctions2_function" "classify" {
     service_account_email = google_service_account.function.email
 
     environment_variables = {
-      S3_BUCKET_NAME      = var.s3_bucket_name
-      AWS_REGION          = var.aws_region
-      NOTIFICATION_EMAIL  = var.notification_email
-      GCP_PROJECT_ID      = var.gcp_project_id
-      GCP_LOCATION        = var.gcp_region
-      EXPECTED_AUTH_TOKEN = random_password.eventbridge_auth_token.result
+      S3_BUCKET_NAME       = var.s3_bucket_name
+      AWS_REGION           = var.aws_region
+      NOTIFICATION_EMAIL   = var.notification_email
+      GCP_PROJECT_ID       = var.gcp_project_id
+      GCP_LOCATION         = var.gcp_region
+      AUTH_TOKEN_SECRET_ID = google_secret_manager_secret.eventbridge_auth_token.secret_id
     }
   }
 }

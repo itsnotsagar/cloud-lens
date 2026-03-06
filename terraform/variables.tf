@@ -11,6 +11,11 @@ variable "project_prefix" {
 variable "notification_email" {
   description = "Email address to receive classification results"
   type        = string
+
+  validation {
+    condition     = can(regex("^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$", var.notification_email))
+    error_message = "Must be a valid email address."
+  }
 }
 
 # AWS

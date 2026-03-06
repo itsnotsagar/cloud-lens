@@ -1,0 +1,260 @@
+name: Cleanup Terraform State Backends
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Type "DELETE" to confirm state backend deletion (DESTRUCTIVE)'
+        required: true
+        type: string
+      force_delete:
+        description: 'Force delete even if state files exist'
+        required: true
+        type: boolean
+        default: false
+
+env:
+  PROJECT_PREFIX: "imgclass"
+  AWS_REGION: "us-east-1"
+
+jobs:
+  validate:
+    name: Validate Deletion Request
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check confirmation
+        run: |
+          if [ "${{ github.event.inputs.confirm }}" != "DELETE" ]; then
+            echo "❌ Confirmation failed. Please type 'DELETE' (all caps) to proceed."
+            exit 1
+          fi
+          echo "⚠️  DESTRUCTIVE OPERATION CONFIRMED"
+          echo "⚠️  This will delete all Terraform state backends"
+          
+          if [ "${{ github.event.inputs.force_delete }}" == "true" ]; then
+            echo "⚠️  FORCE DELETE enabled - will delete even if state files exist"
+          fi
+
+  cleanup-aws-backend:
+    name: Cleanup AWS S3 Backend
+    runs-on: ubuntu-latest
+    needs: validate
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+    steps:
+      - name: Configure AWS CLI
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Check and Delete S3 Bucket
+        run: |
+          BUCKET_NAME="${{ env.PROJECT_PREFIX }}-tf-state-aws"
+          
+          # Check if bucket exists
+          if aws s3 ls "s3://${BUCKET_NAME}" 2>&1 | grep -q 'NoSuchBucket'; then
+            echo "ℹ️  Bucket does not exist: ${BUCKET_NAME}"
+            exit 0
+          fi
+          
+          echo "Found bucket: ${BUCKET_NAME}"
+          
+          # Check if bucket has objects
+          OBJECT_COUNT=$(aws s3 ls "s3://${BUCKET_NAME}" --recursive | wc -l)
+          
+          if [ "$OBJECT_COUNT" -gt 0 ]; then
+            echo "⚠️  Bucket contains ${OBJECT_COUNT} objects (including versions)"
+            
+            if [ "${{ github.event.inputs.force_delete }}" != "true" ]; then
+              echo "❌ Refusing to delete bucket with state files"
+              echo "   Set force_delete=true to override"
+              exit 1
+            fi
+            
+            echo "🗑️  Force delete enabled - emptying bucket..."
+            
+            # Delete all object versions and delete markers
+            aws s3api list-object-versions \
+              --bucket "${BUCKET_NAME}" \
+              --output json \
+              --query '{Objects: Versions[].{Key:Key,VersionId:VersionId}}' | \
+            jq -r '.Objects[]? | "--key \"\(.Key)\" --version-id \"\(.VersionId)\""' | \
+            xargs -I {} aws s3api delete-object --bucket "${BUCKET_NAME}" {}
+            
+            # Delete delete markers
+            aws s3api list-object-versions \
+              --bucket "${BUCKET_NAME}" \
+              --output json \
+              --query '{Objects: DeleteMarkers[].{Key:Key,VersionId:VersionId}}' | \
+            jq -r '.Objects[]? | "--key \"\(.Key)\" --version-id \"\(.VersionId)\""' | \
+            xargs -I {} aws s3api delete-object --bucket "${BUCKET_NAME}" {}
+          fi
+          
+          # Delete the bucket
+          echo "Deleting bucket: ${BUCKET_NAME}"
+          aws s3 rb "s3://${BUCKET_NAME}" --force
+          
+          echo "✅ AWS S3 backend deleted successfully"
+
+  cleanup-gcp-backend:
+    name: Cleanup GCP GCS Backend
+    runs-on: ubuntu-latest
+    needs: validate
+    steps:
+      - name: Authenticate to GCP
+        run: |
+          echo '${{ secrets.GCP_SERVICE_ACCOUNT_KEY }}' | base64 -d > /tmp/gcp-key.json
+          gcloud auth activate-service-account --key-file=/tmp/gcp-key.json
+          gcloud config set project ${{ vars.GCP_PROJECT_ID }}
+
+      - name: Check and Delete GCS Bucket
+        run: |
+          BUCKET_NAME="${{ env.PROJECT_PREFIX }}-tf-state-gcp"
+          
+          # Check if bucket exists
+          if ! gsutil ls -b "gs://${BUCKET_NAME}" 2>&1 | grep -q "${BUCKET_NAME}"; then
+            echo "ℹ️  Bucket does not exist: ${BUCKET_NAME}"
+            exit 0
+          fi
+          
+          echo "Found bucket: ${BUCKET_NAME}"
+          
+          # Check if bucket has objects
+          OBJECT_COUNT=$(gsutil ls -a "gs://${BUCKET_NAME}/**" 2>/dev/null | wc -l)
+          
+          if [ "$OBJECT_COUNT" -gt 0 ]; then
+            echo "⚠️  Bucket contains ${OBJECT_COUNT} objects (including versions)"
+            
+            if [ "${{ github.event.inputs.force_delete }}" != "true" ]; then
+              echo "❌ Refusing to delete bucket with state files"
+              echo "   Set force_delete=true to override"
+              exit 1
+            fi
+            
+            echo "🗑️  Force delete enabled - emptying bucket..."
+            
+            # Delete all versions
+            gsutil -m rm -a "gs://${BUCKET_NAME}/**" || true
+          fi
+          
+          # Delete the bucket
+          echo "Deleting bucket: ${BUCKET_NAME}"
+          gsutil rb "gs://${BUCKET_NAME}"
+          
+          echo "✅ GCP GCS backend deleted successfully"
+
+      - name: Cleanup credentials
+        if: always()
+        run: rm -f /tmp/gcp-key.json
+
+  cleanup-azure-backend:
+    name: Cleanup Azure Storage Backend
+    runs-on: ubuntu-latest
+    needs: validate
+    env:
+      ARM_CLIENT_ID: ${{ secrets.ARM_CLIENT_ID }}
+      ARM_CLIENT_SECRET: ${{ secrets.ARM_CLIENT_SECRET }}
+      ARM_TENANT_ID: ${{ secrets.ARM_TENANT_ID }}
+      ARM_SUBSCRIPTION_ID: ${{ secrets.ARM_SUBSCRIPTION_ID }}
+    steps:
+      - name: Azure Login
+        uses: azure/login@v1
+        with:
+          creds: |
+            {
+              "clientId": "${{ secrets.ARM_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.ARM_CLIENT_SECRET }}",
+              "subscriptionId": "${{ secrets.ARM_SUBSCRIPTION_ID }}",
+              "tenantId": "${{ secrets.ARM_TENANT_ID }}"
+            }
+
+      - name: Check and Delete Azure Storage
+        run: |
+          RG_NAME="${{ env.PROJECT_PREFIX }}-tf-state-rg"
+          STORAGE_ACCOUNT="${{ env.PROJECT_PREFIX }}tfstate"
+          CONTAINER_NAME="tfstate"
+          
+          # Check if resource group exists
+          if ! az group show --name "${RG_NAME}" &>/dev/null; then
+            echo "ℹ️  Resource group does not exist: ${RG_NAME}"
+            exit 0
+          fi
+          
+          echo "Found resource group: ${RG_NAME}"
+          
+          # Check if storage account exists
+          if az storage account show --name "${STORAGE_ACCOUNT}" --resource-group "${RG_NAME}" &>/dev/null; then
+            
+            # Get storage account key
+            ACCOUNT_KEY=$(az storage account keys list \
+              --resource-group "${RG_NAME}" \
+              --account-name "${STORAGE_ACCOUNT}" \
+              --query '[0].value' -o tsv)
+            
+            # Check if container has blobs
+            BLOB_COUNT=$(az storage blob list \
+              --container-name "${CONTAINER_NAME}" \
+              --account-name "${STORAGE_ACCOUNT}" \
+              --account-key "${ACCOUNT_KEY}" \
+              --query 'length(@)' -o tsv 2>/dev/null || echo "0")
+            
+            if [ "$BLOB_COUNT" -gt 0 ]; then
+              echo "⚠️  Container contains ${BLOB_COUNT} blobs"
+              
+              if [ "${{ github.event.inputs.force_delete }}" != "true" ]; then
+                echo "❌ Refusing to delete storage with state files"
+                echo "   Set force_delete=true to override"
+                exit 1
+              fi
+              
+              echo "🗑️  Force delete enabled - emptying container..."
+              
+              # Delete all blobs including versions
+              az storage blob delete-batch \
+                --source "${CONTAINER_NAME}" \
+                --account-name "${STORAGE_ACCOUNT}" \
+                --account-key "${ACCOUNT_KEY}" \
+                --delete-snapshots include || true
+            fi
+          fi
+          
+          # Delete the entire resource group (includes storage account and container)
+          echo "Deleting resource group: ${RG_NAME}"
+          az group delete \
+            --name "${RG_NAME}" \
+            --yes \
+            --no-wait
+          
+          echo "✅ Azure Storage backend deletion initiated"
+          echo "   (Resource group deletion is asynchronous and may take a few minutes)"
+
+  summary:
+    name: Cleanup Summary
+    runs-on: ubuntu-latest
+    needs: [cleanup-aws-backend, cleanup-gcp-backend, cleanup-azure-backend]
+    if: always()
+    steps:
+      - name: Print Summary
+        run: |
+          echo "## Terraform State Backend Cleanup Summary" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Provider | Status | Action |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|----------|--------|--------|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| AWS | ${{ needs.cleanup-aws-backend.result }} | Deleted s3://${{ env.PROJECT_PREFIX }}-tf-state-aws |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| GCP | ${{ needs.cleanup-gcp-backend.result }} | Deleted gs://${{ env.PROJECT_PREFIX }}-tf-state-gcp |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Azure | ${{ needs.cleanup-azure-backend.result }} | Deleted ${{ env.PROJECT_PREFIX }}-tf-state-rg |" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          
+          if [ "${{ github.event.inputs.force_delete }}" == "true" ]; then
+            echo "⚠️  **Force delete was enabled** - all state files were deleted" >> "$GITHUB_STEP_SUMMARY"
+          fi
+          
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "### ⚠️  Important Notes" >> "$GITHUB_STEP_SUMMARY"
+          echo "- All Terraform state backends have been deleted" >> "$GITHUB_STEP_SUMMARY"
+          echo "- You will need to run the setup workflow again before deploying" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Any existing infrastructure is NOT deleted (only state files)" >> "$GITHUB_STEP_SUMMARY"
+          echo "- Run the destroy workflow first if you want to remove infrastructure" >> "$GITHUB_STEP_SUMMARY"

@@ -1,15 +1,22 @@
+import hmac
 import json
+import logging
 import os
+import re
 import time
-import traceback
+from html import escape as html_escape
 
 import boto3
 import functions_framework
 from google.cloud import aiplatform
 from azure.communication.email import EmailClient
 from botocore.config import Config
+from botocore.exceptions import ClientError
 from google.cloud import secretmanager
 from vertexai.generative_models import GenerativeModel, Part
+
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
 
 
 # Environment variables (non-sensitive)
@@ -18,7 +25,7 @@ AWS_REGION = os.environ.get("AWS_REGION", "us-east-1")
 NOTIFICATION_EMAIL = os.environ.get("NOTIFICATION_EMAIL", "")
 GCP_PROJECT_ID = os.environ.get("GCP_PROJECT_ID", "")
 GCP_LOCATION = os.environ.get("GCP_LOCATION", "us-central1")
-EXPECTED_AUTH_TOKEN = os.environ.get("EXPECTED_AUTH_TOKEN", "")
+AUTH_TOKEN_SECRET_ID = os.environ.get("AUTH_TOKEN_SECRET_ID", "")
 
 # Secret Manager client (initialized once)
 secret_client = secretmanager.SecretManagerServiceClient()
@@ -37,7 +44,7 @@ REQUIRED_ENV_VARS = [
     "NOTIFICATION_EMAIL",
     "GCP_PROJECT_ID",
     "GCP_LOCATION",
-    "EXPECTED_AUTH_TOKEN"
+    "AUTH_TOKEN_SECRET_ID"
 ]
 
 def validate_environment():
@@ -48,6 +55,22 @@ def validate_environment():
 
 # Validate at module load time
 validate_environment()
+
+# Allowed image extensions
+ALLOWED_EXTENSIONS = {"jpg", "jpeg", "png", "webp"}
+
+def _is_valid_s3_key(key: str) -> bool:
+    """Validate S3 key to prevent path traversal and restrict to image files."""
+    if not key or ".." in key or key.startswith("/"):
+        return False
+    # Must end with an allowed image extension
+    ext = key.rsplit(".", 1)[-1].lower() if "." in key else ""
+    if ext not in ALLOWED_EXTENSIONS:
+        return False
+    # Only allow safe characters in the key
+    if not re.match(r'^[\w./ -]+$', key):
+        return False
+    return True
 
 
 def get_secret(secret_id: str) -> str:
@@ -64,9 +87,8 @@ def get_secret(secret_id: str) -> str:
         _secrets_cache[secret_id] = secret_value
         return secret_value
     except Exception as e:
-        print(f"CRITICAL: Error retrieving secret {secret_id}: {e}")
-        print(f"Ensure secret exists and service account has secretmanager.secretAccessor role")
-        raise RuntimeError(f"Failed to retrieve secret {secret_id}") from e
+        logger.error("Failed to retrieve secret: %s", e)
+        raise RuntimeError("Failed to retrieve required secret") from e
 
 
 @functions_framework.http
@@ -81,20 +103,25 @@ def classify_image(request):
     try:
         # Step 0: Verify authentication
         auth_header = request.headers.get("X-Auth-Token", "")
-        if not auth_header or auth_header != EXPECTED_AUTH_TOKEN:
-            print("Unauthorized access attempt")
+        expected_token = get_secret(AUTH_TOKEN_SECRET_ID)
+        if not auth_header or not hmac.compare_digest(auth_header, expected_token):
+            logger.warning("Unauthorized access attempt")
             return json.dumps({"error": "Unauthorized"}), 401
         # Parse the incoming request
         request_json = request.get_json(silent=True)
         if not request_json:
             return json.dumps({"error": "No JSON payload received"}), 400
 
-        bucket = request_json.get("bucket", S3_BUCKET_NAME)
+        # Always use the configured bucket — never allow caller to override
+        bucket = S3_BUCKET_NAME
         key = request_json.get("key", "")
-        timestamp = request_json.get("timestamp", "")
 
-        if not bucket or not key:
-            return json.dumps({"error": "Missing 'bucket' or 'key' in request"}), 400
+        if not key:
+            return json.dumps({"error": "Missing 'key' in request"}), 400
+
+        # Validate S3 key to prevent path traversal or access to unintended objects
+        if not _is_valid_s3_key(key):
+            return json.dumps({"error": "Invalid image key"}), 400
 
         # Deduplication: Check if we've processed this image recently (within 60 seconds)
         image_id = f"{bucket}/{key}"
@@ -103,7 +130,7 @@ def classify_image(request):
         if image_id in _processed_images:
             last_processed = _processed_images[image_id]
             if current_time - last_processed < 60:
-                print(f"Skipping duplicate request for {image_id} (processed {current_time - last_processed:.1f}s ago)")
+                logger.info("Skipping duplicate request for %s (processed %.1fs ago)", image_id, current_time - last_processed)
                 return json.dumps({
                     "status": "skipped",
                     "reason": "duplicate_request",
@@ -119,19 +146,18 @@ def classify_image(request):
             _processed_images.clear()
             _processed_images.update(dict(sorted_items[-50:]))
 
-        print(f"Processing image: s3://{bucket}/{key}")
+        logger.info("Processing image: s3://%s/%s", bucket, key)
 
         # Step 1: Download the image from S3
         image_bytes = download_from_s3(bucket, key)
-        print(f"Downloaded {len(image_bytes)} bytes from S3")
 
         # Step 2: Classify using Vertex AI Gemini
         classification_result = classify_with_gemini(image_bytes, key)
-        print(f"Classification result: {classification_result}")
+        logger.info("Classification complete for %s (%d chars)", key, len(classification_result))
 
         # Step 3: Send email via Azure Communication Services
         email_sent = send_email(key, classification_result)
-        print(f"Email sent: {email_sent}")
+        logger.info("Email sent: %s", email_sent)
 
         return json.dumps({
             "status": "success",
@@ -141,8 +167,8 @@ def classify_image(request):
         }), 200
 
     except Exception as e:
-        traceback.print_exc()
-        return json.dumps({"error": str(e)}), 500
+        logger.exception("Unhandled error processing request")
+        return json.dumps({"error": "Internal server error"}), 500
 
 
 def get_s3_client():
@@ -172,37 +198,40 @@ def download_from_s3(bucket: str, key: str) -> bytes:
     """Download an object from S3 and return its bytes."""
     s3_client = get_s3_client()
     
-    # Check size first to prevent OOM
     # Retry logic for eventual consistency (S3 might not be immediately available)
-    max_retries = 3
-    retry_delay = 1  # seconds
+    max_retries = 2
+    retry_delay = 0.5  # seconds
     
     for attempt in range(max_retries):
         try:
-            head = s3_client.head_object(Bucket=bucket, Key=key)
-            size = head['ContentLength']
+            # Download directly without head request (saves one API call)
+            response = s3_client.get_object(Bucket=bucket, Key=key)
+            image_bytes = response["Body"].read()
+            
+            # Validate size after download
+            size = len(image_bytes)
             max_size = 10 * 1024 * 1024  # 10 MB
             
             if size > max_size:
                 raise ValueError(f"Image too large: {size} bytes (max {max_size} bytes)")
             
-            print(f"Downloading image: {size} bytes")
-            break
+            logger.info("Downloaded %d bytes from S3", size)
+            return image_bytes
+            
         except s3_client.exceptions.NoSuchKey:
             if attempt < max_retries - 1:
-                print(f"Image not yet available, retrying in {retry_delay}s (attempt {attempt + 1}/{max_retries})")
+                logger.info("Image not yet available, retrying in %ss (attempt %d/%d)", retry_delay, attempt + 1, max_retries)
                 time.sleep(retry_delay)
                 retry_delay *= 2  # Exponential backoff
             else:
-                print(f"Error: Image not found after {max_retries} attempts")
+                logger.error("Image not found after %d attempts", max_retries)
                 raise
-        except Exception as e:
-            print(f"Error checking image size: {e}")
+        except ClientError as e:
+            logger.error("S3 client error downloading image: %s", e.response['Error']['Code'])
             raise
-    
-    # Download the image
-    response = s3_client.get_object(Bucket=bucket, Key=key)
-    return response["Body"].read()
+        except Exception as e:
+            logger.error("Error downloading image: %s", e)
+            raise
 
 
 def get_gemini_model():
@@ -240,7 +269,9 @@ def classify_with_gemini(image_bytes: bytes, filename: str) -> str:
 **Tags:** [comma-separated tags]"""
 
     model = get_gemini_model()
-    response = model.generate_content([image_part, prompt])
+    response = model.generate_content(
+        [image_part, prompt],
+    )
     return response.text
 
 
@@ -258,12 +289,16 @@ def send_email(image_name: str, classification: str) -> bool:
     Send classification results via Azure Communication Services Email.
     """
     if not NOTIFICATION_EMAIL:
-        print("Email not configured — skipping email send")
+        logger.info("Email not configured — skipping email send")
         return False
 
     try:
         azure_sender_address = get_secret("imgclass-azure-sender-address")
         email_client = get_email_client()
+
+        # Escape user-controlled content to prevent HTML injection
+        safe_image_name = html_escape(image_name)
+        safe_classification = html_escape(classification)
 
         message = {
             "senderAddress": azure_sender_address,
@@ -271,43 +306,26 @@ def send_email(image_name: str, classification: str) -> bool:
                 "to": [{"address": NOTIFICATION_EMAIL}]
             },
             "content": {
-                "subject": f"Image Classification Result: {image_name}",
-                "html": f"""
-                <html>
-                <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; background: #f8fafc;">
-                    <div style="background: white; border-radius: 12px; padding: 24px; border: 1px solid #e2e8f0;">
-                        <h2 style="color: #1e293b; margin-top: 0;">Image Classification Result</h2>
-
-                        <div style="background: #f1f5f9; border-radius: 8px; padding: 12px; margin-bottom: 16px;">
-                            <strong style="color: #64748b; font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em;">Image</strong>
-                            <p style="margin: 4px 0 0; color: #334155; font-weight: 500;">{image_name}</p>
-                        </div>
-
-                        <div style="background: #f1f5f9; border-radius: 8px; padding: 16px; margin-bottom: 16px;">
-                            <strong style="color: #64748b; font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em;">Classification</strong>
-                            <div style="margin-top: 8px; color: #334155; white-space: pre-wrap; line-height: 1.6;">{classification}</div>
-                        </div>
-
-                        <div style="border-top: 1px solid #e2e8f0; padding-top: 16px; margin-top: 16px;">
-                            <p style="color: #94a3b8; font-size: 12px; margin: 0;">
-                                Multi-Cloud Image Classification Pipeline<br/>
-                                Storage: AWS S3 &bull; Classification: GCP Vertex AI (Gemini) &bull; Email: Azure Communication Services
-                            </p>
-                        </div>
-                    </div>
-                </body>
-                </html>
-                """,
+                "subject": f"Image Classification: {safe_image_name}",
+                "html": f"""<html><body style="font-family:sans-serif;max-width:600px;margin:0 auto;padding:20px">
+<h2>Image Classification Result</h2>
+<div style="background:#f5f5f5;padding:15px;border-radius:8px;margin:15px 0">
+<strong>Image:</strong> {safe_image_name}
+</div>
+<div style="background:#f5f5f5;padding:15px;border-radius:8px;margin:15px 0">
+<strong>Classification:</strong><br><pre style="white-space:pre-wrap;margin:10px 0">{safe_classification}</pre>
+</div>
+<p style="color:#666;font-size:12px;margin-top:20px">Multi-Cloud Pipeline: AWS S3 &rarr; GCP Vertex AI &rarr; Azure Email</p>
+</body></html>""",
                 "plainText": f"Image: {image_name}\n\nClassification:\n{classification}\n\n---\nMulti-Cloud Image Classification Pipeline",
             },
         }
 
         poller = email_client.begin_send(message)
-        result = poller.result()
-        print(f"Email send result: {result}")
+        result = poller.result(timeout=30)
+        logger.info("Email sent successfully")
         return True
 
     except Exception as e:
-        print(f"Failed to send email: {e}")
-        traceback.print_exc()
+        logger.exception("Failed to send email")
         return False

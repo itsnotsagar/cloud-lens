@@ -55,6 +55,7 @@
   <script>
     // Injected by Terraform templatefile()
     const API_URL = '${api_gateway_url}';
+    const API_KEY = '${api_gateway_api_key}';
 
     const dropZone = document.getElementById('dropZone');
     const fileInput = document.getElementById('fileInput');
@@ -127,13 +128,24 @@
       showStatus('Uploading image to AWS S3 via API Gateway…', 'info');
 
       try {
-        // Generate a unique filename
         const timestamp = Date.now();
         const safeName = selectedFile.name.replace(/[^a-zA-Z0-9._-]/g, '_');
         const uploadName = `$${timestamp}-$${safeName}`;
+        const url = `$${API_URL}/upload/$${uploadName}`;
+        const contentType = selectedFile.type;
+
+        console.log('[upload] PUT', url);
+        console.log('[upload] Origin:', location.origin);
+        console.log('[upload] Content-Type:', contentType);
+        console.log('[upload] File size:', selectedFile.size);
+
+        // Read file as ArrayBuffer for reliable binary transfer
+        const buffer = await selectedFile.arrayBuffer();
 
         const xhr = new XMLHttpRequest();
-        xhr.open('PUT', `$${API_URL}/upload/$${uploadName}`, true);
+        xhr.open('PUT', url, true);
+        xhr.setRequestHeader('Content-Type', contentType);
+        xhr.setRequestHeader('x-api-key', API_KEY);
 
         xhr.upload.addEventListener('progress', (e) => {
           if (e.lengthComputable) {
@@ -143,6 +155,7 @@
         });
 
         xhr.onload = () => {
+          console.log('[upload] onload — status:', xhr.status, 'headers:', xhr.getAllResponseHeaders());
           if (xhr.status >= 200 && xhr.status < 300) {
             progressFill.style.width = '100%';
             showStatus(
@@ -157,13 +170,17 @@
         };
 
         xhr.onerror = () => {
-          showStatus('Upload failed: network error. Check console for details.', 'error');
+          console.error('[upload] onerror — readyState:', xhr.readyState, 'status:', xhr.status);
+          console.error('[upload] Target URL:', url);
+          console.error('[upload] Page origin:', location.origin);
+          showStatus('Upload failed: network error. Open DevTools (F12) → Console for details.', 'error');
           resetButton();
         };
 
-        xhr.send(selectedFile);
+        xhr.send(buffer);
 
       } catch (err) {
+        console.error('[upload] exception:', err);
         showStatus(`Upload failed: $${err.message}`, 'error');
         resetButton();
       }
