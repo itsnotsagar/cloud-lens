@@ -136,6 +136,7 @@
 
         const xhr = new XMLHttpRequest();
         xhr.open('PUT', `$${API_URL}/upload/$${uploadName}`, true);
+        xhr.setRequestHeader('Content-Type', selectedFile.type);
         xhr.setRequestHeader('x-api-key', API_KEY);
 
         xhr.upload.addEventListener('progress', (e) => {

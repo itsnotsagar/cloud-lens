@@ -137,7 +137,8 @@ resource "aws_s3_object" "index_html" {
     api_gateway_url     = aws_api_gateway_stage.prod.invoke_url
     api_gateway_api_key = aws_api_gateway_api_key.frontend.value
   })
-  content_type = "text/html"
+  content_type  = "text/html"
+  cache_control = "no-cache"
   etag = md5(templatefile("${path.module}/../../src/frontend/index.html", {
     api_gateway_url     = aws_api_gateway_stage.prod.invoke_url
     api_gateway_api_key = aws_api_gateway_api_key.frontend.value
