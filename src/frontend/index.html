@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self'; img-src 'self' data:; script-src 'unsafe-inline'; connect-src ${api_gateway_url}/" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self'; img-src 'self' data:; script-src 'unsafe-inline'; connect-src https:" />
   <title>Image Classification — Multi-Cloud</title>
   <link rel="stylesheet" href="styles.css" />
 </head>
@@ -136,7 +136,6 @@
 
         const xhr = new XMLHttpRequest();
         xhr.open('PUT', `$${API_URL}/upload/$${uploadName}`, true);
-        xhr.setRequestHeader('Content-Type', selectedFile.type);
         xhr.setRequestHeader('x-api-key', API_KEY);
 
         xhr.upload.addEventListener('progress', (e) => {
@@ -161,6 +160,7 @@
         };
 
         xhr.onerror = () => {
+          console.error('XHR error — URL:', `$${API_URL}/upload/$${uploadName}`, 'readyState:', xhr.readyState, 'status:', xhr.status);
           showStatus('Upload failed: network error. Check console for details.', 'error');
           resetButton();
         };
