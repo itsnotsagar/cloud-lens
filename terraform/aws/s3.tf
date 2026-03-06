@@ -29,8 +29,8 @@ resource "aws_s3_bucket_cors_configuration" "images" {
   bucket = aws_s3_bucket.images.id
 
   cors_rule {
-    allowed_headers = ["*"]
-    allowed_methods = ["PUT", "POST"]
+    allowed_headers = ["Content-Type", "Accept", "X-Amz-Date", "Authorization", "X-Api-Key"]
+    allowed_methods = ["PUT"]
     allowed_origins = ["https://${aws_s3_bucket_website_configuration.website.website_endpoint}"]
     expose_headers  = ["ETag"]
     max_age_seconds = 3000
@@ -88,6 +88,16 @@ resource "aws_s3_bucket_website_configuration" "website" {
 
   error_document {
     key = "index.html"
+  }
+}
+
+resource "aws_s3_bucket_server_side_encryption_configuration" "website" {
+  bucket = aws_s3_bucket.website.id
+
+  rule {
+    apply_server_side_encryption_by_default {
+      sse_algorithm = "AES256"
+    }
   }
 }
 

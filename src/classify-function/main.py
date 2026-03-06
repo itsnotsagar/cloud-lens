@@ -1,3 +1,4 @@
+import hmac
 import json
 import logging
 import os
@@ -24,7 +25,7 @@ AWS_REGION = os.environ.get("AWS_REGION", "us-east-1")
 NOTIFICATION_EMAIL = os.environ.get("NOTIFICATION_EMAIL", "")
 GCP_PROJECT_ID = os.environ.get("GCP_PROJECT_ID", "")
 GCP_LOCATION = os.environ.get("GCP_LOCATION", "us-central1")
-EXPECTED_AUTH_TOKEN = os.environ.get("EXPECTED_AUTH_TOKEN", "")
+AUTH_TOKEN_SECRET_ID = os.environ.get("AUTH_TOKEN_SECRET_ID", "")
 
 # Secret Manager client (initialized once)
 secret_client = secretmanager.SecretManagerServiceClient()
@@ -43,7 +44,7 @@ REQUIRED_ENV_VARS = [
     "NOTIFICATION_EMAIL",
     "GCP_PROJECT_ID",
     "GCP_LOCATION",
-    "EXPECTED_AUTH_TOKEN"
+    "AUTH_TOKEN_SECRET_ID"
 ]
 
 def validate_environment():
@@ -102,7 +103,8 @@ def classify_image(request):
     try:
         # Step 0: Verify authentication
         auth_header = request.headers.get("X-Auth-Token", "")
-        if not auth_header or auth_header != EXPECTED_AUTH_TOKEN:
+        expected_token = get_secret(AUTH_TOKEN_SECRET_ID)
+        if not auth_header or not hmac.compare_digest(auth_header, expected_token):
             logger.warning("Unauthorized access attempt")
             return json.dumps({"error": "Unauthorized"}), 401
         # Parse the incoming request

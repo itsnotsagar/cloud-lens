@@ -64,12 +64,12 @@ resource "google_cloudfunctions2_function" "classify" {
     service_account_email = google_service_account.function.email
 
     environment_variables = {
-      S3_BUCKET_NAME          = var.s3_bucket_name
-      AWS_REGION              = var.aws_region
-      NOTIFICATION_EMAIL      = var.notification_email
-      GCP_PROJECT_ID          = var.gcp_project_id
-      GCP_LOCATION            = var.gcp_region
-      AUTH_TOKEN_SECRET_ID    = google_secret_manager_secret.eventbridge_auth_token.secret_id
+      S3_BUCKET_NAME       = var.s3_bucket_name
+      AWS_REGION           = var.aws_region
+      NOTIFICATION_EMAIL   = var.notification_email
+      GCP_PROJECT_ID       = var.gcp_project_id
+      GCP_LOCATION         = var.gcp_region
+      AUTH_TOKEN_SECRET_ID = google_secret_manager_secret.eventbridge_auth_token.secret_id
     }
   }
 }
