@@ -137,16 +137,17 @@ resource "aws_api_gateway_deployment" "main" {
   rest_api_id = aws_api_gateway_rest_api.main.id
 
   triggers = {
-    # Only trigger redeployment when actual API configuration changes
+    # Trigger redeployment when API configuration or response parameters change
     redeployment = sha1(jsonencode([
       aws_api_gateway_method.put_upload.id,
       aws_api_gateway_integration.put_s3.id,
       aws_api_gateway_method_response.put_200.id,
       aws_api_gateway_integration_response.put_200.id,
+      aws_api_gateway_integration_response.put_200.response_parameters,
       aws_api_gateway_method.options_upload.id,
       aws_api_gateway_integration.options_upload.id,
-      aws_api_gateway_gateway_response.default_4xx.id,
-      aws_api_gateway_gateway_response.default_5xx.id,
+      aws_api_gateway_gateway_response.default_4xx.response_parameters,
+      aws_api_gateway_gateway_response.default_5xx.response_parameters,
     ]))
   }
 
