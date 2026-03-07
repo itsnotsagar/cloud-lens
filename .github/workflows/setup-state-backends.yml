@@ -213,7 +213,6 @@ jobs:
               --sku Standard_LRS \
               --encryption-services blob \
               --https-only true \
-              --min-tls-version TLS1_2 \
               --allow-blob-public-access false \
               --tags Project=${{ env.PROJECT_PREFIX }} ManagedBy=terraform
             
