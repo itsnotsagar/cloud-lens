@@ -59,7 +59,10 @@ jobs:
 
       - name: Terraform Init
         working-directory: terraform/azure
-        run: terraform init
+        run: |
+          SUB_SHORT=$(echo "${{ secrets.ARM_SUBSCRIPTION_ID }}" | tr -d '-' | cut -c1-8)
+          terraform init \
+            -backend-config="storage_account_name=${{ env.PROJECT_PREFIX }}tf${SUB_SHORT}"
 
       - name: Terraform Plan
         working-directory: terraform/azure
@@ -112,7 +115,10 @@ jobs:
 
       - name: Terraform Init
         working-directory: terraform/aws
-        run: terraform init
+        run: |
+          AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+          terraform init \
+            -backend-config="bucket=${{ env.PROJECT_PREFIX }}-tf-state-${AWS_ACCOUNT_ID}"
 
       - name: Terraform Plan
         working-directory: terraform/aws
@@ -174,7 +180,9 @@ jobs:
 
       - name: Terraform Init
         working-directory: terraform/gcp
-        run: terraform init
+        run: |
+          terraform init \
+            -backend-config="bucket=${{ env.PROJECT_PREFIX }}-tf-state-${{ vars.GCP_PROJECT_ID }}"
 
       - name: Terraform Plan
         working-directory: terraform/gcp
@@ -243,7 +251,10 @@ jobs:
 
       - name: Terraform Init
         working-directory: terraform/aws
-        run: terraform init
+        run: |
+          AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+          terraform init \
+            -backend-config="bucket=${{ env.PROJECT_PREFIX }}-tf-state-${AWS_ACCOUNT_ID}"
 
       - name: Terraform Plan
         working-directory: terraform/aws

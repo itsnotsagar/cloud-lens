@@ -2,7 +2,7 @@ terraform {
   required_version = ">= 1.5.0"
 
   backend "gcs" {
-    bucket = "imgclass-tf-state-gcp"
+    # bucket name passed via -backend-config at init time
     prefix = "gcp"
   }
 

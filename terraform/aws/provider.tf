@@ -2,7 +2,7 @@ terraform {
   required_version = ">= 1.5.0"
 
   backend "s3" {
-    bucket  = "imgclass-tf-state-aws"
+    # bucket name passed via -backend-config at init time
     key     = "aws/terraform.tfstate"
     region  = "us-east-1"
     encrypt = true
