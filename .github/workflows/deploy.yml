@@ -47,7 +47,7 @@ jobs:
       ARM_TENANT_ID: ${{ secrets.ARM_TENANT_ID }}
       ARM_SUBSCRIPTION_ID: ${{ secrets.ARM_SUBSCRIPTION_ID }}
     outputs:
-      email_connection_string: ${{ steps.outputs.outputs.email_connection_string }}
+      email_connection_string_b64: ${{ steps.outputs.outputs.email_connection_string_b64 }}
       sender_address: ${{ steps.outputs.outputs.sender_address }}
     steps:
       - uses: actions/checkout@v4
@@ -84,12 +84,14 @@ jobs:
         working-directory: terraform/azure
         run: |
           CONN_STR=$(terraform output -raw communication_service_connection_string)
+          if [ -z "${CONN_STR}" ]; then
+            echo "::error::Azure connection string is empty — communication_service_connection_string output not available"
+            exit 1
+          fi
           echo "::add-mask::${CONN_STR}"
-          # Use multiline delimiter syntax — connection string contains ; and = that break single-line format
-          EOF=$(dd if=/dev/urandom bs=15 count=1 status=none | base64)
-          echo "email_connection_string<<${EOF}" >> "$GITHUB_OUTPUT"
-          echo "${CONN_STR}" >> "$GITHUB_OUTPUT"
-          echo "${EOF}" >> "$GITHUB_OUTPUT"
+          # Base64-encode for safe transport — connection string contains ; and = that can break GITHUB_OUTPUT
+          CONN_B64=$(printf '%s' "${CONN_STR}" | base64 -w0)
+          echo "email_connection_string_b64=${CONN_B64}" >> "$GITHUB_OUTPUT"
           echo "sender_address=$(terraform output -raw sender_address)" >> "$GITHUB_OUTPUT"
 
   # =========================================================================
@@ -194,7 +196,7 @@ jobs:
           # Route job outputs through env to avoid shell expansion of special chars
           UPSTREAM_BUCKET_NAME: ${{ needs.deploy-aws-initial.outputs.image_bucket_name }}
           UPSTREAM_ROLE_ARN: ${{ needs.deploy-aws-initial.outputs.gcp_s3_reader_role_arn }}
-          UPSTREAM_AZURE_CONN_STR: ${{ needs.deploy-azure.outputs.email_connection_string }}
+          UPSTREAM_AZURE_CONN_B64: ${{ needs.deploy-azure.outputs.email_connection_string_b64 }}
           UPSTREAM_AZURE_SENDER: ${{ needs.deploy-azure.outputs.sender_address }}
           EVENT_NAME: ${{ github.event_name }}
         run: |
@@ -207,8 +209,13 @@ jobs:
           else
             export TF_VAR_s3_bucket_name="${UPSTREAM_BUCKET_NAME}"
             export TF_VAR_aws_s3_reader_role_arn="${UPSTREAM_ROLE_ARN}"
-            export TF_VAR_azure_email_connection_string="${UPSTREAM_AZURE_CONN_STR}"
+            # Decode base64-encoded connection string
+            export TF_VAR_azure_email_connection_string=$(printf '%s' "${UPSTREAM_AZURE_CONN_B64}" | base64 -d)
             export TF_VAR_azure_sender_address="${UPSTREAM_AZURE_SENDER}"
+            if [ -z "${TF_VAR_azure_email_connection_string}" ]; then
+              echo "::error::Azure connection string is empty after decode — check deploy-azure outputs"
+              exit 1
+            fi
           fi
           
           terraform plan -out=tfplan
