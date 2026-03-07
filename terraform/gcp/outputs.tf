@@ -34,11 +34,6 @@ output "function_service_account_unique_id" {
   value       = google_service_account.function.unique_id
 }
 
-output "aws_secret_access_key_secret_id" {
-  description = "Secret Manager ID for AWS secret key"
-  value       = google_secret_manager_secret.aws_secret_access_key.id
-}
-
 output "azure_email_connection_string_secret_id" {
   description = "Secret Manager ID for Azure email connection string"
   value       = google_secret_manager_secret.azure_email_connection_string.id
