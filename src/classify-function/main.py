@@ -35,7 +35,6 @@ _secrets_cache = {}
 _s3_client = None
 _email_client = None
 _gemini_model = None
-_processed_images = {}  # Cache to prevent duplicate processing
 
 # Validate required environment variables at startup
 REQUIRED_ENV_VARS = [
@@ -122,29 +121,6 @@ def classify_image(request):
         # Validate S3 key to prevent path traversal or access to unintended objects
         if not _is_valid_s3_key(key):
             return json.dumps({"error": "Invalid image key"}), 400
-
-        # Deduplication: Check if we've processed this image recently (within 60 seconds)
-        image_id = f"{bucket}/{key}"
-        current_time = time.time()
-        
-        if image_id in _processed_images:
-            last_processed = _processed_images[image_id]
-            if current_time - last_processed < 60:
-                logger.info("Skipping duplicate request for %s (processed %.1fs ago)", image_id, current_time - last_processed)
-                return json.dumps({
-                    "status": "skipped",
-                    "reason": "duplicate_request",
-                    "image": key,
-                }), 200
-        
-        # Mark as processing
-        _processed_images[image_id] = current_time
-        
-        # Clean up old entries (keep only last 100)
-        if len(_processed_images) > 100:
-            sorted_items = sorted(_processed_images.items(), key=lambda x: x[1])
-            _processed_images.clear()
-            _processed_images.update(dict(sorted_items[-50:]))
 
         logger.info("Processing image: s3://%s/%s", bucket, key)
 

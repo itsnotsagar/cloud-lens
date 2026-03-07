@@ -55,6 +55,8 @@ resource "aws_api_gateway_integration" "put_s3" {
     "integration.request.path.filename"       = "method.request.path.filename"
     "integration.request.header.Content-Type" = "method.request.header.Content-Type"
   }
+
+  content_handling = "CONVERT_TO_BINARY"
 }
 
 # Method response for PUT
