@@ -86,8 +86,9 @@ jobs:
                 "Rules": [{
                   "ID": "RetainLast10Versions",
                   "Status": "Enabled",
-                  "Filter": {},
+                  "Filter": {"Prefix": ""},
                   "NoncurrentVersionExpiration": {
+                    "NoncurrentDays": 1,
                     "NewerNoncurrentVersions": 10
                   }
                 }]
@@ -121,7 +122,9 @@ jobs:
           BUCKET_NAME="${{ env.PROJECT_PREFIX }}-tf-state-${GCP_PROJECT_ID}"
           
           # Check if bucket exists
-          if ! gsutil ls -b "gs://${BUCKET_NAME}" 2>&1 | grep -q "${BUCKET_NAME}"; then
+          if gsutil ls -b "gs://${BUCKET_NAME}" &>/dev/null; then
+            echo "ℹ️  GCS bucket already exists: ${BUCKET_NAME}"
+          else
             echo "Creating GCS bucket: ${BUCKET_NAME}"
             
             gsutil mb \
@@ -154,8 +157,6 @@ jobs:
             echo "   Bucket: ${BUCKET_NAME}"
             echo "   Region: ${{ env.GCP_REGION }}"
             echo "   Versioning: Enabled (keep last 10 versions)"
-          else
-            echo "ℹ️  GCS bucket already exists: ${BUCKET_NAME}"
           fi
 
       - name: Cleanup credentials
