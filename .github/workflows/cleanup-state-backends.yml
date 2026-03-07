@@ -23,15 +23,18 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Check confirmation
+        env:
+          CONFIRM_INPUT: ${{ github.event.inputs.confirm }}
+          FORCE_DELETE: ${{ github.event.inputs.force_delete }}
         run: |
-          if [ "${{ github.event.inputs.confirm }}" != "DELETE" ]; then
+          if [ "${CONFIRM_INPUT}" != "DELETE" ]; then
             echo "❌ Confirmation failed. Please type 'DELETE' (all caps) to proceed."
             exit 1
           fi
           echo "⚠️  DESTRUCTIVE OPERATION CONFIRMED"
           echo "⚠️  This will delete all Terraform state backends"
           
-          if [ "${{ github.event.inputs.force_delete }}" == "true" ]; then
+          if [ "${FORCE_DELETE}" == "true" ]; then
             echo "⚠️  FORCE DELETE enabled - will delete even if state files exist"
           fi
 
@@ -51,6 +54,8 @@ jobs:
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Check and Delete S3 Bucket
+        env:
+          FORCE_DELETE: ${{ github.event.inputs.force_delete }}
         run: |
           BUCKET_NAME="${{ env.PROJECT_PREFIX }}-tf-state-aws"
           
@@ -68,7 +73,7 @@ jobs:
           if [ "$OBJECT_COUNT" -gt 0 ]; then
             echo "⚠️  Bucket contains ${OBJECT_COUNT} objects (including versions)"
             
-            if [ "${{ github.event.inputs.force_delete }}" != "true" ]; then
+            if [ "${FORCE_DELETE}" != "true" ]; then
               echo "❌ Refusing to delete bucket with state files"
               echo "   Set force_delete=true to override"
               exit 1
@@ -111,12 +116,16 @@ jobs:
     needs: validate
     steps:
       - name: Authenticate to GCP
+        env:
+          GCP_SA_KEY: ${{ secrets.GCP_SERVICE_ACCOUNT_KEY }}
         run: |
-          echo '${{ secrets.GCP_SERVICE_ACCOUNT_KEY }}' | base64 -d > /tmp/gcp-key.json
+          echo "${GCP_SA_KEY}" | base64 -d > /tmp/gcp-key.json
           gcloud auth activate-service-account --key-file=/tmp/gcp-key.json
           gcloud config set project ${{ vars.GCP_PROJECT_ID }}
 
       - name: Check and Delete GCS Bucket
+        env:
+          FORCE_DELETE: ${{ github.event.inputs.force_delete }}
         run: |
           BUCKET_NAME="${{ env.PROJECT_PREFIX }}-tf-state-gcp"
           
@@ -134,7 +143,7 @@ jobs:
           if [ "$OBJECT_COUNT" -gt 0 ]; then
             echo "⚠️  Bucket contains ${OBJECT_COUNT} objects (including versions)"
             
-            if [ "${{ github.event.inputs.force_delete }}" != "true" ]; then
+            if [ "${FORCE_DELETE}" != "true" ]; then
               echo "❌ Refusing to delete bucket with state files"
               echo "   Set force_delete=true to override"
               exit 1
@@ -180,6 +189,8 @@ jobs:
             }
 
       - name: Check and Delete Azure Storage
+        env:
+          FORCE_DELETE: ${{ github.event.inputs.force_delete }}
         run: |
           RG_NAME="${{ env.PROJECT_PREFIX }}-tf-state-rg"
           STORAGE_ACCOUNT="${{ env.PROJECT_PREFIX }}tfstate"
@@ -196,23 +207,24 @@ jobs:
           # Check if storage account exists
           if az storage account show --name "${STORAGE_ACCOUNT}" --resource-group "${RG_NAME}" &>/dev/null; then
             
-            # Get storage account key
+            # Get storage account key and mask it
             ACCOUNT_KEY=$(az storage account keys list \
               --resource-group "${RG_NAME}" \
               --account-name "${STORAGE_ACCOUNT}" \
               --query '[0].value' -o tsv)
+            echo "::add-mask::${ACCOUNT_KEY}"
+            export AZURE_STORAGE_KEY="${ACCOUNT_KEY}"
             
             # Check if container has blobs
             BLOB_COUNT=$(az storage blob list \
               --container-name "${CONTAINER_NAME}" \
               --account-name "${STORAGE_ACCOUNT}" \
-              --account-key "${ACCOUNT_KEY}" \
               --query 'length(@)' -o tsv 2>/dev/null || echo "0")
             
             if [ "$BLOB_COUNT" -gt 0 ]; then
               echo "⚠️  Container contains ${BLOB_COUNT} blobs"
               
-              if [ "${{ github.event.inputs.force_delete }}" != "true" ]; then
+              if [ "${FORCE_DELETE}" != "true" ]; then
                 echo "❌ Refusing to delete storage with state files"
                 echo "   Set force_delete=true to override"
                 exit 1
@@ -224,7 +236,6 @@ jobs:
               az storage blob delete-batch \
                 --source "${CONTAINER_NAME}" \
                 --account-name "${STORAGE_ACCOUNT}" \
-                --account-key "${ACCOUNT_KEY}" \
                 --delete-snapshots include || true
             fi
           fi

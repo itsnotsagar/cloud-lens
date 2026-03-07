@@ -29,17 +29,7 @@ env:
   PROJECT_PREFIX: "imgclass"
   # Determine if this is a plan-only run (PR) or apply run (manual workflow_dispatch)
   IS_PLAN_ONLY: ${{ github.event_name == 'pull_request' }}
-
-  # AWS credentials
-  AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-  AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
   AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
-
-  # Azure credentials
-  ARM_CLIENT_ID: ${{ secrets.ARM_CLIENT_ID }}
-  ARM_CLIENT_SECRET: ${{ secrets.ARM_CLIENT_SECRET }}
-  ARM_TENANT_ID: ${{ secrets.ARM_TENANT_ID }}
-  ARM_SUBSCRIPTION_ID: ${{ secrets.ARM_SUBSCRIPTION_ID }}
 
 permissions:
   contents: read
@@ -51,6 +41,11 @@ jobs:
   deploy-azure:
     name: "Azure — Email Service"
     runs-on: ubuntu-latest
+    env:
+      ARM_CLIENT_ID: ${{ secrets.ARM_CLIENT_ID }}
+      ARM_CLIENT_SECRET: ${{ secrets.ARM_CLIENT_SECRET }}
+      ARM_TENANT_ID: ${{ secrets.ARM_TENANT_ID }}
+      ARM_SUBSCRIPTION_ID: ${{ secrets.ARM_SUBSCRIPTION_ID }}
     outputs:
       email_connection_string: ${{ steps.outputs.outputs.email_connection_string }}
       sender_address: ${{ steps.outputs.outputs.sender_address }}
@@ -85,7 +80,9 @@ jobs:
         if: github.event_name != 'pull_request'
         working-directory: terraform/azure
         run: |
-          echo "email_connection_string=$(terraform output -raw communication_service_connection_string)" >> "$GITHUB_OUTPUT"
+          CONN_STR=$(terraform output -raw communication_service_connection_string)
+          echo "::add-mask::${CONN_STR}"
+          echo "email_connection_string=${CONN_STR}" >> "$GITHUB_OUTPUT"
           echo "sender_address=$(terraform output -raw sender_address)" >> "$GITHUB_OUTPUT"
 
   # =========================================================================
@@ -95,6 +92,9 @@ jobs:
   deploy-aws-initial:
     name: "AWS — Initial Setup"
     runs-on: ubuntu-latest
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
     outputs:
       image_bucket_name: ${{ steps.outputs.outputs.image_bucket_name }}
       image_bucket_arn: ${{ steps.outputs.outputs.image_bucket_arn }}
@@ -138,8 +138,12 @@ jobs:
           echo "image_bucket_arn=$(terraform output -raw image_bucket_arn)" >> "$GITHUB_OUTPUT"
           echo "website_url=$(terraform output -raw website_url)" >> "$GITHUB_OUTPUT"
           echo "api_gateway_url=$(terraform output -raw api_gateway_invoke_url)" >> "$GITHUB_OUTPUT"
-          echo "aws_access_key_id=$(terraform output -raw gcp_function_aws_access_key_id)" >> "$GITHUB_OUTPUT"
-          echo "aws_secret_access_key=$(terraform output -raw gcp_function_aws_secret_access_key)" >> "$GITHUB_OUTPUT"
+          GCP_AWS_KEY_ID=$(terraform output -raw gcp_function_aws_access_key_id)
+          GCP_AWS_SECRET=$(terraform output -raw gcp_function_aws_secret_access_key)
+          echo "::add-mask::${GCP_AWS_KEY_ID}"
+          echo "::add-mask::${GCP_AWS_SECRET}"
+          echo "aws_access_key_id=${GCP_AWS_KEY_ID}" >> "$GITHUB_OUTPUT"
+          echo "aws_secret_access_key=${GCP_AWS_SECRET}" >> "$GITHUB_OUTPUT"
 
   # =========================================================================
   # Step 2: Deploy GCP (Cloud Function + Secrets + Vertex AI)
@@ -162,8 +166,10 @@ jobs:
           terraform_wrapper: false
 
       - name: Authenticate to GCP
+        env:
+          GCP_SA_KEY: ${{ secrets.GCP_SERVICE_ACCOUNT_KEY }}
         run: |
-          echo '${{ secrets.GCP_SERVICE_ACCOUNT_KEY }}' | base64 -d > /tmp/gcp-key.json
+          echo "${GCP_SA_KEY}" | base64 -d > /tmp/gcp-key.json
           echo "GOOGLE_APPLICATION_CREDENTIALS=/tmp/gcp-key.json" >> "$GITHUB_ENV"
 
       - name: Terraform Init
@@ -172,34 +178,29 @@ jobs:
 
       - name: Terraform Plan
         working-directory: terraform/gcp
+        env:
+          TF_VAR_project_prefix: ${{ env.PROJECT_PREFIX }}
+          TF_VAR_gcp_project_id: ${{ vars.GCP_PROJECT_ID }}
+          TF_VAR_gcp_region: ${{ vars.GCP_REGION || 'us-central1' }}
+          TF_VAR_aws_region: ${{ env.AWS_REGION }}
+          TF_VAR_notification_email: ${{ vars.NOTIFICATION_EMAIL }}
         run: |
           # Use placeholder values for PR plans when outputs aren't available
           if [ "${{ github.event_name }}" == "pull_request" ]; then
-            S3_BUCKET="placeholder-bucket"
-            AWS_KEY_ID="placeholder-key"
-            AWS_SECRET="placeholder-secret"
-            AZURE_CONN="placeholder-connection"
-            AZURE_SENDER="donotreply@placeholder.com"
+            export TF_VAR_s3_bucket_name="placeholder-bucket"
+            export TF_VAR_aws_access_key_id="placeholder-key"
+            export TF_VAR_aws_secret_access_key="placeholder-secret"
+            export TF_VAR_azure_email_connection_string="placeholder-connection"
+            export TF_VAR_azure_sender_address="donotreply@placeholder.com"
           else
-            S3_BUCKET="${{ needs.deploy-aws-initial.outputs.image_bucket_name }}"
-            AWS_KEY_ID="${{ needs.deploy-aws-initial.outputs.aws_access_key_id }}"
-            AWS_SECRET="${{ needs.deploy-aws-initial.outputs.aws_secret_access_key }}"
-            AZURE_CONN="${{ needs.deploy-azure.outputs.email_connection_string }}"
-            AZURE_SENDER="${{ needs.deploy-azure.outputs.sender_address }}"
+            export TF_VAR_s3_bucket_name="${{ needs.deploy-aws-initial.outputs.image_bucket_name }}"
+            export TF_VAR_aws_access_key_id="${{ needs.deploy-aws-initial.outputs.aws_access_key_id }}"
+            export TF_VAR_aws_secret_access_key="${{ needs.deploy-aws-initial.outputs.aws_secret_access_key }}"
+            export TF_VAR_azure_email_connection_string="${{ needs.deploy-azure.outputs.email_connection_string }}"
+            export TF_VAR_azure_sender_address="${{ needs.deploy-azure.outputs.sender_address }}"
           fi
           
-          terraform plan \
-            -var="project_prefix=${{ env.PROJECT_PREFIX }}" \
-            -var="gcp_project_id=${{ vars.GCP_PROJECT_ID }}" \
-            -var="gcp_region=${{ vars.GCP_REGION || 'us-central1' }}" \
-            -var="s3_bucket_name=${S3_BUCKET}" \
-            -var="aws_access_key_id=${AWS_KEY_ID}" \
-            -var="aws_secret_access_key=${AWS_SECRET}" \
-            -var="aws_region=${{ env.AWS_REGION }}" \
-            -var="azure_email_connection_string=${AZURE_CONN}" \
-            -var="azure_sender_address=${AZURE_SENDER}" \
-            -var="notification_email=${{ vars.NOTIFICATION_EMAIL }}" \
-            -out=tfplan
+          terraform plan -out=tfplan
 
       - name: Terraform Apply
         if: github.event_name != 'pull_request' && github.event.inputs.action != 'plan'
@@ -212,7 +213,9 @@ jobs:
         working-directory: terraform/gcp
         run: |
           echo "function_url=$(terraform output -raw function_url)" >> "$GITHUB_OUTPUT"
-          echo "eventbridge_auth_token=$(terraform output -raw eventbridge_auth_token)" >> "$GITHUB_OUTPUT"
+          EB_TOKEN=$(terraform output -raw eventbridge_auth_token)
+          echo "::add-mask::${EB_TOKEN}"
+          echo "eventbridge_auth_token=${EB_TOKEN}" >> "$GITHUB_OUTPUT"
 
       - name: Cleanup credentials
         if: always()
@@ -227,6 +230,9 @@ jobs:
     runs-on: ubuntu-latest
     needs: [deploy-gcp, deploy-aws-initial]
     if: always() && (needs.deploy-gcp.result == 'success' && needs.deploy-aws-initial.result == 'success')
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
     steps:
       - uses: actions/checkout@v4
 
@@ -241,22 +247,20 @@ jobs:
 
       - name: Terraform Plan
         working-directory: terraform/aws
+        env:
+          TF_VAR_project_prefix: ${{ env.PROJECT_PREFIX }}
+          TF_VAR_aws_region: ${{ env.AWS_REGION }}
         run: |
           # Use placeholder values for PR plans when outputs aren't available
           if [ "${{ github.event_name }}" == "pull_request" ]; then
-            FUNCTION_URL="https://placeholder-function-url.com"
-            AUTH_TOKEN="placeholder-token"
+            export TF_VAR_gcp_function_url="https://placeholder-function-url.com"
+            export TF_VAR_eventbridge_auth_token="placeholder-token"
           else
-            FUNCTION_URL="${{ needs.deploy-gcp.outputs.function_url }}"
-            AUTH_TOKEN="${{ needs.deploy-gcp.outputs.eventbridge_auth_token }}"
+            export TF_VAR_gcp_function_url="${{ needs.deploy-gcp.outputs.function_url }}"
+            export TF_VAR_eventbridge_auth_token="${{ needs.deploy-gcp.outputs.eventbridge_auth_token }}"
           fi
           
-          terraform plan \
-            -var="project_prefix=${{ env.PROJECT_PREFIX }}" \
-            -var="aws_region=${{ env.AWS_REGION }}" \
-            -var="gcp_function_url=${FUNCTION_URL}" \
-            -var="eventbridge_auth_token=${AUTH_TOKEN}" \
-            -out=tfplan
+          terraform plan -out=tfplan
 
       - name: Terraform Apply
         if: github.event_name != 'pull_request' && github.event.inputs.action != 'plan'

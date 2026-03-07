@@ -20,8 +20,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Check confirmation
+        env:
+          CONFIRM_INPUT: ${{ github.event.inputs.confirm }}
         run: |
-          if [ "${{ github.event.inputs.confirm }}" != "create" ]; then
+          if [ "${CONFIRM_INPUT}" != "create" ]; then
             echo "❌ Confirmation failed. Please type 'create' to proceed."
             exit 1
           fi
@@ -104,8 +106,10 @@ jobs:
     needs: validate
     steps:
       - name: Authenticate to GCP
+        env:
+          GCP_SA_KEY: ${{ secrets.GCP_SERVICE_ACCOUNT_KEY }}
         run: |
-          echo '${{ secrets.GCP_SERVICE_ACCOUNT_KEY }}' | base64 -d > /tmp/gcp-key.json
+          echo "${GCP_SA_KEY}" | base64 -d > /tmp/gcp-key.json
           gcloud auth activate-service-account --key-file=/tmp/gcp-key.json
           gcloud config set project ${{ vars.GCP_PROJECT_ID }}
 
@@ -221,17 +225,17 @@ jobs:
             --resource-group "${RG_NAME}" \
             --account-name "${STORAGE_ACCOUNT}" \
             --query '[0].value' -o tsv)
+          echo "::add-mask::${ACCOUNT_KEY}"
+          export AZURE_STORAGE_KEY="${ACCOUNT_KEY}"
           
           # Check if container exists
           if ! az storage container show \
             --name "${CONTAINER_NAME}" \
-            --account-name "${STORAGE_ACCOUNT}" \
-            --account-key "${ACCOUNT_KEY}" &>/dev/null; then
+            --account-name "${STORAGE_ACCOUNT}" &>/dev/null; then
             echo "Creating storage container: ${CONTAINER_NAME}"
             az storage container create \
               --name "${CONTAINER_NAME}" \
-              --account-name "${STORAGE_ACCOUNT}" \
-              --account-key "${ACCOUNT_KEY}"
+              --account-name "${STORAGE_ACCOUNT}"
           else
             echo "ℹ️  Storage container already exists: ${CONTAINER_NAME}"
           fi
