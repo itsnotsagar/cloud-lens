@@ -187,18 +187,24 @@ jobs:
           TF_VAR_gcp_region: ${{ vars.GCP_REGION || 'us-central1' }}
           TF_VAR_aws_region: ${{ env.AWS_REGION }}
           TF_VAR_notification_email: ${{ vars.NOTIFICATION_EMAIL }}
+          # Route job outputs through env to avoid shell expansion of special chars
+          UPSTREAM_BUCKET_NAME: ${{ needs.deploy-aws-initial.outputs.image_bucket_name }}
+          UPSTREAM_ROLE_ARN: ${{ needs.deploy-aws-initial.outputs.gcp_s3_reader_role_arn }}
+          UPSTREAM_AZURE_CONN_STR: ${{ needs.deploy-azure.outputs.email_connection_string }}
+          UPSTREAM_AZURE_SENDER: ${{ needs.deploy-azure.outputs.sender_address }}
+          EVENT_NAME: ${{ github.event_name }}
         run: |
           # Use placeholder values for PR plans when outputs aren't available
-          if [ "${{ github.event_name }}" == "pull_request" ]; then
+          if [ "${EVENT_NAME}" == "pull_request" ]; then
             export TF_VAR_s3_bucket_name="placeholder-bucket"
             export TF_VAR_aws_s3_reader_role_arn="arn:aws:iam::000000000000:role/placeholder"
             export TF_VAR_azure_email_connection_string="placeholder-connection"
             export TF_VAR_azure_sender_address="donotreply@placeholder.com"
           else
-            export TF_VAR_s3_bucket_name="${{ needs.deploy-aws-initial.outputs.image_bucket_name }}"
-            export TF_VAR_aws_s3_reader_role_arn="${{ needs.deploy-aws-initial.outputs.gcp_s3_reader_role_arn }}"
-            export TF_VAR_azure_email_connection_string="${{ needs.deploy-azure.outputs.email_connection_string }}"
-            export TF_VAR_azure_sender_address="${{ needs.deploy-azure.outputs.sender_address }}"
+            export TF_VAR_s3_bucket_name="${UPSTREAM_BUCKET_NAME}"
+            export TF_VAR_aws_s3_reader_role_arn="${UPSTREAM_ROLE_ARN}"
+            export TF_VAR_azure_email_connection_string="${UPSTREAM_AZURE_CONN_STR}"
+            export TF_VAR_azure_sender_address="${UPSTREAM_AZURE_SENDER}"
           fi
           
           terraform plan -out=tfplan
@@ -255,16 +261,20 @@ jobs:
         env:
           TF_VAR_project_prefix: ${{ env.PROJECT_PREFIX }}
           TF_VAR_aws_region: ${{ env.AWS_REGION }}
+          UPSTREAM_FUNCTION_URL: ${{ needs.deploy-gcp.outputs.function_url }}
+          UPSTREAM_EB_TOKEN: ${{ needs.deploy-gcp.outputs.eventbridge_auth_token }}
+          UPSTREAM_SA_UNIQUE_ID: ${{ needs.deploy-gcp.outputs.service_account_unique_id }}
+          EVENT_NAME: ${{ github.event_name }}
         run: |
           # Use placeholder values for PR plans when outputs aren't available
-          if [ "${{ github.event_name }}" == "pull_request" ]; then
+          if [ "${EVENT_NAME}" == "pull_request" ]; then
             export TF_VAR_gcp_function_url="https://placeholder-function-url.com"
             export TF_VAR_eventbridge_auth_token="placeholder-token"
             export TF_VAR_gcp_function_service_account_unique_id="placeholder"
           else
-            export TF_VAR_gcp_function_url="${{ needs.deploy-gcp.outputs.function_url }}"
-            export TF_VAR_eventbridge_auth_token="${{ needs.deploy-gcp.outputs.eventbridge_auth_token }}"
-            export TF_VAR_gcp_function_service_account_unique_id="${{ needs.deploy-gcp.outputs.service_account_unique_id }}"
+            export TF_VAR_gcp_function_url="${UPSTREAM_FUNCTION_URL}"
+            export TF_VAR_eventbridge_auth_token="${UPSTREAM_EB_TOKEN}"
+            export TF_VAR_gcp_function_service_account_unique_id="${UPSTREAM_SA_UNIQUE_ID}"
           fi
           
           terraform plan -out=tfplan
