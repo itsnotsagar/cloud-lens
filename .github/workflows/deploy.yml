@@ -85,7 +85,11 @@ jobs:
         run: |
           CONN_STR=$(terraform output -raw communication_service_connection_string)
           echo "::add-mask::${CONN_STR}"
-          echo "email_connection_string=${CONN_STR}" >> "$GITHUB_OUTPUT"
+          # Use multiline delimiter syntax — connection string contains ; and = that break single-line format
+          EOF=$(dd if=/dev/urandom bs=15 count=1 status=none | base64)
+          echo "email_connection_string<<${EOF}" >> "$GITHUB_OUTPUT"
+          echo "${CONN_STR}" >> "$GITHUB_OUTPUT"
+          echo "${EOF}" >> "$GITHUB_OUTPUT"
           echo "sender_address=$(terraform output -raw sender_address)" >> "$GITHUB_OUTPUT"
 
   # =========================================================================
