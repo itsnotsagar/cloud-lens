@@ -2,34 +2,6 @@
 # GCP Secret Manager - Centralized secrets storage
 # =============================================================================
 
-# AWS Access Key ID for S3 access (restricted permissions)
-resource "google_secret_manager_secret" "aws_access_key_id" {
-  secret_id = "${var.project_prefix}-aws-access-key-id"
-
-  replication {
-    auto {}
-  }
-}
-
-resource "google_secret_manager_secret_version" "aws_access_key_id" {
-  secret      = google_secret_manager_secret.aws_access_key_id.id
-  secret_data = var.aws_access_key_id
-}
-
-# AWS Secret Access Key for S3 access (restricted permissions)
-resource "google_secret_manager_secret" "aws_secret_access_key" {
-  secret_id = "${var.project_prefix}-aws-secret-access-key"
-
-  replication {
-    auto {}
-  }
-}
-
-resource "google_secret_manager_secret_version" "aws_secret_access_key" {
-  secret      = google_secret_manager_secret.aws_secret_access_key.id
-  secret_data = var.aws_secret_access_key
-}
-
 # Azure Communication Services connection string
 resource "google_secret_manager_secret" "azure_email_connection_string" {
   secret_id = "${var.project_prefix}-azure-email-connection-string"

@@ -32,16 +32,9 @@ variable "aws_region" {
   default     = "us-east-1"
 }
 
-variable "aws_access_key_id" {
-  description = "AWS access key ID for S3 access (from AWS module)"
+variable "aws_s3_reader_role_arn" {
+  description = "AWS IAM Role ARN for S3 read access via OIDC federation (from AWS module)"
   type        = string
-  sensitive   = true
-}
-
-variable "aws_secret_access_key" {
-  description = "AWS secret access key for S3 access (from AWS module)"
-  type        = string
-  sensitive   = true
 }
 
 variable "azure_email_connection_string" {

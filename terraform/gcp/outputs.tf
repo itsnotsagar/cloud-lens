@@ -25,8 +25,13 @@ output "eventbridge_auth_token" {
 }
 
 output "aws_access_key_id_secret_id" {
-  description = "Secret Manager ID for AWS access key"
-  value       = google_secret_manager_secret.aws_access_key_id.id
+  description = "Secret Manager ID for AWS access key (deprecated — kept for backward compat)"
+  value       = ""
+}
+
+output "function_service_account_unique_id" {
+  description = "Unique numeric ID of the Cloud Function service account (used for AWS OIDC trust)"
+  value       = google_service_account.function.unique_id
 }
 
 output "aws_secret_access_key_secret_id" {

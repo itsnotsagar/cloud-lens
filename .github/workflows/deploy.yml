@@ -103,8 +103,7 @@ jobs:
       image_bucket_arn: ${{ steps.outputs.outputs.image_bucket_arn }}
       website_url: ${{ steps.outputs.outputs.website_url }}
       api_gateway_url: ${{ steps.outputs.outputs.api_gateway_url }}
-      aws_access_key_id: ${{ steps.outputs.outputs.aws_access_key_id }}
-      aws_secret_access_key: ${{ steps.outputs.outputs.aws_secret_access_key }}
+      gcp_s3_reader_role_arn: ${{ steps.outputs.outputs.gcp_s3_reader_role_arn }}
     steps:
       - uses: actions/checkout@v4
 
@@ -144,12 +143,7 @@ jobs:
           echo "image_bucket_arn=$(terraform output -raw image_bucket_arn)" >> "$GITHUB_OUTPUT"
           echo "website_url=$(terraform output -raw website_url)" >> "$GITHUB_OUTPUT"
           echo "api_gateway_url=$(terraform output -raw api_gateway_invoke_url)" >> "$GITHUB_OUTPUT"
-          GCP_AWS_KEY_ID=$(terraform output -raw gcp_function_aws_access_key_id)
-          GCP_AWS_SECRET=$(terraform output -raw gcp_function_aws_secret_access_key)
-          echo "::add-mask::${GCP_AWS_KEY_ID}"
-          echo "::add-mask::${GCP_AWS_SECRET}"
-          echo "aws_access_key_id=${GCP_AWS_KEY_ID}" >> "$GITHUB_OUTPUT"
-          echo "aws_secret_access_key=${GCP_AWS_SECRET}" >> "$GITHUB_OUTPUT"
+          echo "gcp_s3_reader_role_arn=$(terraform output -raw gcp_s3_reader_role_arn)" >> "$GITHUB_OUTPUT"
 
   # =========================================================================
   # Step 2: Deploy GCP (Cloud Function + Secrets + Vertex AI)
@@ -163,6 +157,7 @@ jobs:
     outputs:
       function_url: ${{ steps.outputs.outputs.function_url }}
       eventbridge_auth_token: ${{ steps.outputs.outputs.eventbridge_auth_token }}
+      service_account_unique_id: ${{ steps.outputs.outputs.service_account_unique_id }}
     steps:
       - uses: actions/checkout@v4
 
@@ -196,14 +191,12 @@ jobs:
           # Use placeholder values for PR plans when outputs aren't available
           if [ "${{ github.event_name }}" == "pull_request" ]; then
             export TF_VAR_s3_bucket_name="placeholder-bucket"
-            export TF_VAR_aws_access_key_id="placeholder-key"
-            export TF_VAR_aws_secret_access_key="placeholder-secret"
+            export TF_VAR_aws_s3_reader_role_arn="arn:aws:iam::000000000000:role/placeholder"
             export TF_VAR_azure_email_connection_string="placeholder-connection"
             export TF_VAR_azure_sender_address="donotreply@placeholder.com"
           else
             export TF_VAR_s3_bucket_name="${{ needs.deploy-aws-initial.outputs.image_bucket_name }}"
-            export TF_VAR_aws_access_key_id="${{ needs.deploy-aws-initial.outputs.aws_access_key_id }}"
-            export TF_VAR_aws_secret_access_key="${{ needs.deploy-aws-initial.outputs.aws_secret_access_key }}"
+            export TF_VAR_aws_s3_reader_role_arn="${{ needs.deploy-aws-initial.outputs.gcp_s3_reader_role_arn }}"
             export TF_VAR_azure_email_connection_string="${{ needs.deploy-azure.outputs.email_connection_string }}"
             export TF_VAR_azure_sender_address="${{ needs.deploy-azure.outputs.sender_address }}"
           fi
@@ -224,6 +217,7 @@ jobs:
           EB_TOKEN=$(terraform output -raw eventbridge_auth_token)
           echo "::add-mask::${EB_TOKEN}"
           echo "eventbridge_auth_token=${EB_TOKEN}" >> "$GITHUB_OUTPUT"
+          echo "service_account_unique_id=$(terraform output -raw function_service_account_unique_id)" >> "$GITHUB_OUTPUT"
 
       - name: Cleanup credentials
         if: always()
@@ -266,9 +260,11 @@ jobs:
           if [ "${{ github.event_name }}" == "pull_request" ]; then
             export TF_VAR_gcp_function_url="https://placeholder-function-url.com"
             export TF_VAR_eventbridge_auth_token="placeholder-token"
+            export TF_VAR_gcp_function_service_account_unique_id="placeholder"
           else
             export TF_VAR_gcp_function_url="${{ needs.deploy-gcp.outputs.function_url }}"
             export TF_VAR_eventbridge_auth_token="${{ needs.deploy-gcp.outputs.eventbridge_auth_token }}"
+            export TF_VAR_gcp_function_service_account_unique_id="${{ needs.deploy-gcp.outputs.service_account_unique_id }}"
           fi
           
           terraform plan -out=tfplan

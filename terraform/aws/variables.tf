@@ -26,3 +26,9 @@ variable "eventbridge_auth_token" {
   type        = string
   sensitive   = true
 }
+
+variable "gcp_function_service_account_unique_id" {
+  description = "GCP service account unique ID (numeric) for OIDC federation. Placeholder on initial deploy, real value on final pass."
+  type        = string
+  default     = "placeholder"
+}

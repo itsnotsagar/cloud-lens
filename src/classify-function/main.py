@@ -8,11 +8,13 @@ from html import escape as html_escape
 
 import boto3
 import functions_framework
+import google.auth.transport.requests as google_auth_transport
 from google.cloud import aiplatform
 from azure.communication.email import EmailClient
 from botocore.config import Config
 from botocore.exceptions import ClientError
 from google.cloud import secretmanager
+from google.oauth2 import id_token as google_id_token
 from vertexai.generative_models import GenerativeModel, Part
 
 logger = logging.getLogger(__name__)
@@ -22,6 +24,7 @@ logger.setLevel(logging.INFO)
 # Environment variables (non-sensitive)
 S3_BUCKET_NAME = os.environ.get("S3_BUCKET_NAME", "")
 AWS_REGION = os.environ.get("AWS_REGION", "us-east-1")
+AWS_ROLE_ARN = os.environ.get("AWS_ROLE_ARN", "")
 NOTIFICATION_EMAIL = os.environ.get("NOTIFICATION_EMAIL", "")
 GCP_PROJECT_ID = os.environ.get("GCP_PROJECT_ID", "")
 GCP_LOCATION = os.environ.get("GCP_LOCATION", "us-central1")
@@ -33,6 +36,7 @@ secret_client = secretmanager.SecretManagerServiceClient()
 # Cache for secrets and clients (avoid repeated API calls and initialization)
 _secrets_cache = {}
 _s3_client = None
+_s3_creds_expiry = 0  # Unix timestamp for STS credential expiry
 _email_client = None
 _gemini_model = None
 
@@ -40,6 +44,7 @@ _gemini_model = None
 REQUIRED_ENV_VARS = [
     "S3_BUCKET_NAME",
     "AWS_REGION",
+    "AWS_ROLE_ARN",
     "NOTIFICATION_EMAIL",
     "GCP_PROJECT_ID",
     "GCP_LOCATION",
@@ -148,25 +153,43 @@ def classify_image(request):
 
 
 def get_s3_client():
-    """Get or create cached S3 client."""
-    global _s3_client
-    if _s3_client is None:
-        aws_access_key_id = get_secret("imgclass-aws-access-key-id")
-        aws_secret_access_key = get_secret("imgclass-aws-secret-access-key")
-        
-        config = Config(
-            connect_timeout=10,
-            read_timeout=30,
-            retries={'max_attempts': 3, 'mode': 'standard'}
-        )
-        
-        _s3_client = boto3.client(
-            "s3",
-            aws_access_key_id=aws_access_key_id,
-            aws_secret_access_key=aws_secret_access_key,
-            region_name=AWS_REGION,
-            config=config
-        )
+    """Get or create cached S3 client using OIDC federation (GCP → AWS)."""
+    global _s3_client, _s3_creds_expiry
+
+    # Reuse cached client if STS credentials are still valid (5-min buffer)
+    if _s3_client is not None and time.time() < _s3_creds_expiry - 300:
+        return _s3_client
+
+    # Step 1: Get a GCP identity token with audience = sts.amazonaws.com
+    gcp_token = google_id_token.fetch_id_token(
+        google_auth_transport.Request(), "sts.amazonaws.com"
+    )
+
+    # Step 2: Assume the AWS IAM Role via OIDC federation
+    sts = boto3.client("sts", region_name=AWS_REGION)
+    creds = sts.assume_role_with_web_identity(
+        RoleArn=AWS_ROLE_ARN,
+        RoleSessionName="gcp-classify-function",
+        WebIdentityToken=gcp_token,
+        DurationSeconds=3600,
+    )["Credentials"]
+
+    _s3_creds_expiry = creds["Expiration"].timestamp()
+
+    config = Config(
+        connect_timeout=10,
+        read_timeout=30,
+        retries={"max_attempts": 3, "mode": "standard"},
+    )
+
+    _s3_client = boto3.client(
+        "s3",
+        aws_access_key_id=creds["AccessKeyId"],
+        aws_secret_access_key=creds["SecretAccessKey"],
+        aws_session_token=creds["SessionToken"],
+        region_name=AWS_REGION,
+        config=config,
+    )
     return _s3_client
 
 

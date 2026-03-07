@@ -92,16 +92,43 @@ resource "aws_iam_role_policy_attachment" "cors_lambda_basic" {
 }
 
 # =============================================================================
-# Restricted IAM User for GCP Function (S3 Read-Only Access)
+# OIDC Federation: GCP Cloud Function → AWS (no static keys)
 # =============================================================================
 
-resource "aws_iam_user" "gcp_function_s3_reader" {
-  name = "${var.project_prefix}-gcp-function-s3-reader"
+data "tls_certificate" "google" {
+  url = "https://accounts.google.com/.well-known/openid-configuration"
 }
 
-resource "aws_iam_user_policy" "gcp_function_s3_reader" {
+resource "aws_iam_openid_connect_provider" "google" {
+  url             = "https://accounts.google.com"
+  client_id_list  = ["sts.amazonaws.com"]
+  thumbprint_list = [data.tls_certificate.google.certificates[0].sha1_fingerprint]
+}
+
+resource "aws_iam_role" "gcp_function_s3_reader" {
+  name = "${var.project_prefix}-gcp-function-s3-reader-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect = "Allow"
+      Principal = {
+        Federated = aws_iam_openid_connect_provider.google.arn
+      }
+      Action = "sts:AssumeRoleWithWebIdentity"
+      Condition = {
+        StringEquals = {
+          "accounts.google.com:aud" = "sts.amazonaws.com"
+          "accounts.google.com:sub" = var.gcp_function_service_account_unique_id
+        }
+      }
+    }]
+  })
+}
+
+resource "aws_iam_role_policy" "gcp_function_s3_reader" {
   name = "${var.project_prefix}-s3-read-only"
-  user = aws_iam_user.gcp_function_s3_reader.name
+  role = aws_iam_role.gcp_function_s3_reader.id
 
   policy = jsonencode({
     Version = "2012-10-17"
@@ -122,10 +149,6 @@ resource "aws_iam_user_policy" "gcp_function_s3_reader" {
       }
     ]
   })
-}
-
-resource "aws_iam_access_key" "gcp_function_s3_reader" {
-  user = aws_iam_user.gcp_function_s3_reader.name
 }
 
 # =============================================================================

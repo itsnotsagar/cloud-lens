@@ -34,16 +34,9 @@ output "aws_account_id" {
   value       = data.aws_caller_identity.current.account_id
 }
 
-output "gcp_function_aws_access_key_id" {
-  description = "AWS access key ID for GCP function (restricted to S3 read-only)"
-  value       = aws_iam_access_key.gcp_function_s3_reader.id
-  sensitive   = true
-}
-
-output "gcp_function_aws_secret_access_key" {
-  description = "AWS secret access key for GCP function (restricted to S3 read-only)"
-  value       = aws_iam_access_key.gcp_function_s3_reader.secret
-  sensitive   = true
+output "gcp_s3_reader_role_arn" {
+  description = "IAM Role ARN for GCP function to assume via OIDC federation"
+  value       = aws_iam_role.gcp_function_s3_reader.arn
 }
 
 output "eventbridge_rule_name" {

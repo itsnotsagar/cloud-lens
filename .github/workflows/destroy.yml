@@ -67,7 +67,8 @@ jobs:
             -var="project_prefix=${{ env.PROJECT_PREFIX }}" \
             -var="aws_region=${{ env.AWS_REGION }}" \
             -var="gcp_function_url=https://placeholder" \
-            -var="eventbridge_auth_token=placeholder"
+            -var="eventbridge_auth_token=placeholder" \
+            -var="gcp_function_service_account_unique_id=placeholder"
 
   # =========================================================================
   # Step 2: Destroy GCP (after AWS is gone)
@@ -105,8 +106,7 @@ jobs:
             -var="gcp_project_id=${{ vars.GCP_PROJECT_ID }}" \
             -var="gcp_region=${{ vars.GCP_REGION || 'us-central1' }}" \
             -var="s3_bucket_name=placeholder" \
-            -var="aws_access_key_id=placeholder" \
-            -var="aws_secret_access_key=placeholder" \
+            -var="aws_s3_reader_role_arn=arn:aws:iam::000000000000:role/placeholder" \
             -var="aws_region=${{ env.AWS_REGION }}" \
             -var="azure_email_connection_string=placeholder" \
             -var="azure_sender_address=placeholder" \
