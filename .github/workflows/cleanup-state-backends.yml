@@ -81,16 +81,20 @@ jobs:
               --bucket "${BUCKET_NAME}" \
               --output json \
               --query '{Objects: Versions[].{Key:Key,VersionId:VersionId}}' | \
-            jq -r '.Objects[]? | "--key \"\(.Key)\" --version-id \"\(.VersionId)\""' | \
-            xargs -I {} aws s3api delete-object --bucket "${BUCKET_NAME}" {}
+            jq -r '.Objects[]? | [.Key, .VersionId] | @tsv' | \
+            while IFS=$'\t' read -r key vid; do
+              aws s3api delete-object --bucket "${BUCKET_NAME}" --key "$key" --version-id "$vid"
+            done
             
             # Delete delete markers
             aws s3api list-object-versions \
               --bucket "${BUCKET_NAME}" \
               --output json \
               --query '{Objects: DeleteMarkers[].{Key:Key,VersionId:VersionId}}' | \
-            jq -r '.Objects[]? | "--key \"\(.Key)\" --version-id \"\(.VersionId)\""' | \
-            xargs -I {} aws s3api delete-object --bucket "${BUCKET_NAME}" {}
+            jq -r '.Objects[]? | [.Key, .VersionId] | @tsv' | \
+            while IFS=$'\t' read -r key vid; do
+              aws s3api delete-object --bucket "${BUCKET_NAME}" --key "$key" --version-id "$vid"
+            done
           fi
           
           # Delete the bucket
