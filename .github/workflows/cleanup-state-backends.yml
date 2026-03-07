@@ -55,8 +55,8 @@ jobs:
           BUCKET_NAME="${{ env.PROJECT_PREFIX }}-tf-state-aws"
           
           # Check if bucket exists
-          if aws s3 ls "s3://${BUCKET_NAME}" 2>&1 | grep -q 'NoSuchBucket'; then
-            echo "ℹ️  Bucket does not exist: ${BUCKET_NAME}"
+          if ! aws s3api head-bucket --bucket "${BUCKET_NAME}" 2>/dev/null; then
+            echo "✅ Bucket already deleted: ${BUCKET_NAME}"
             exit 0
           fi
           
@@ -99,9 +99,11 @@ jobs:
           
           # Delete the bucket
           echo "Deleting bucket: ${BUCKET_NAME}"
-          aws s3 rb "s3://${BUCKET_NAME}" --force
-          
-          echo "✅ AWS S3 backend deleted successfully"
+          if aws s3 rb "s3://${BUCKET_NAME}" --force 2>/dev/null; then
+            echo "✅ AWS S3 backend deleted successfully"
+          else
+            echo "✅ Bucket already deleted: ${BUCKET_NAME}"
+          fi
 
   cleanup-gcp-backend:
     name: Cleanup GCP GCS Backend
@@ -119,8 +121,8 @@ jobs:
           BUCKET_NAME="${{ env.PROJECT_PREFIX }}-tf-state-gcp"
           
           # Check if bucket exists
-          if ! gsutil ls -b "gs://${BUCKET_NAME}" 2>&1 | grep -q "${BUCKET_NAME}"; then
-            echo "ℹ️  Bucket does not exist: ${BUCKET_NAME}"
+          if ! gsutil ls -b "gs://${BUCKET_NAME}" 2>/dev/null | grep -q "${BUCKET_NAME}"; then
+            echo "✅ Bucket already deleted: ${BUCKET_NAME}"
             exit 0
           fi
           
@@ -146,9 +148,11 @@ jobs:
           
           # Delete the bucket
           echo "Deleting bucket: ${BUCKET_NAME}"
-          gsutil rb "gs://${BUCKET_NAME}"
-          
-          echo "✅ GCP GCS backend deleted successfully"
+          if gsutil rb "gs://${BUCKET_NAME}" 2>/dev/null; then
+            echo "✅ GCP GCS backend deleted successfully"
+          else
+            echo "✅ Bucket already deleted: ${BUCKET_NAME}"
+          fi
 
       - name: Cleanup credentials
         if: always()
@@ -183,7 +187,7 @@ jobs:
           
           # Check if resource group exists
           if ! az group show --name "${RG_NAME}" &>/dev/null; then
-            echo "ℹ️  Resource group does not exist: ${RG_NAME}"
+            echo "✅ Resource group already deleted: ${RG_NAME}"
             exit 0
           fi
           
