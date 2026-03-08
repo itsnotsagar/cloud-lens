@@ -14,8 +14,9 @@ on:
         default: false
 
 env:
-  PROJECT_PREFIX: "imgclass"
-  AWS_REGION: "us-east-1"
+  PROJECT_PREFIX: ${{ vars.PROJECT_PREFIX || 'imgclass' }}
+  UNIQUE_SUFFIX: ${{ vars.UNIQUE_SUFFIX }}
+  AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
 
 jobs:
   validate:
@@ -52,7 +53,7 @@ jobs:
 
       - name: Check and Delete S3 Bucket
         run: |
-          BUCKET_NAME="${{ env.PROJECT_PREFIX }}-tf-state-aws"
+          BUCKET_NAME="${{ env.PROJECT_PREFIX }}-tf-state-aws-${{ env.UNIQUE_SUFFIX }}"
           
           # Check if bucket exists
           if aws s3 ls "s3://${BUCKET_NAME}" 2>&1 | grep -q 'NoSuchBucket'; then
@@ -112,7 +113,7 @@ jobs:
 
       - name: Check and Delete GCS Bucket
         run: |
-          BUCKET_NAME="${{ env.PROJECT_PREFIX }}-tf-state-gcp"
+          BUCKET_NAME="${{ env.PROJECT_PREFIX }}-tf-state-gcp-${{ env.UNIQUE_SUFFIX }}"
           
           # Check if bucket exists
           if ! gsutil ls -b "gs://${BUCKET_NAME}" 2>&1 | grep -q "${BUCKET_NAME}"; then
@@ -173,8 +174,8 @@ jobs:
 
       - name: Check and Delete Azure Storage
         run: |
-          RG_NAME="${{ env.PROJECT_PREFIX }}-tf-state-rg"
-          STORAGE_ACCOUNT="${{ env.PROJECT_PREFIX }}tfstate"
+          RG_NAME="${{ env.PROJECT_PREFIX }}-tf-state-rg-${{ env.UNIQUE_SUFFIX }}"
+          STORAGE_ACCOUNT="${{ env.PROJECT_PREFIX }}tfstate${{ env.UNIQUE_SUFFIX }}"
           CONTAINER_NAME="tfstate"
           
           # Check if resource group exists

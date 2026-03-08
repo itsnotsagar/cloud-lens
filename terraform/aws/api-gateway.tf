@@ -2,6 +2,10 @@
 # API Gateway — proxies PUT requests to S3
 # =============================================================================
 
+locals {
+  cors_origin = "'http://${aws_s3_bucket_website_configuration.website.website_endpoint}'"
+}
+
 resource "aws_api_gateway_rest_api" "main" {
   name        = "${var.project_prefix}-api"
   description = "API Gateway to proxy image uploads to S3"
@@ -77,7 +81,7 @@ resource "aws_api_gateway_integration_response" "put_200" {
   status_code = aws_api_gateway_method_response.put_200.status_code
 
   response_parameters = {
-    "method.response.header.Access-Control-Allow-Origin" = "'*'"
+    "method.response.header.Access-Control-Allow-Origin" = local.cors_origin
   }
 
   depends_on = [aws_api_gateway_integration.put_s3]
@@ -125,7 +129,7 @@ resource "aws_api_gateway_integration_response" "options_200" {
   status_code = aws_api_gateway_method_response.options_200.status_code
 
   response_parameters = {
-    "method.response.header.Access-Control-Allow-Origin"  = "'*'"
+    "method.response.header.Access-Control-Allow-Origin"  = local.cors_origin
     "method.response.header.Access-Control-Allow-Methods" = "'PUT,OPTIONS'"
     "method.response.header.Access-Control-Allow-Headers" = "'Content-Type,Accept,X-Amz-Date,Authorization,X-Api-Key'"
   }
@@ -142,7 +146,7 @@ resource "aws_api_gateway_gateway_response" "default_4xx" {
   response_type = "DEFAULT_4XX"
 
   response_parameters = {
-    "gatewayresponse.header.Access-Control-Allow-Origin"  = "'*'"
+    "gatewayresponse.header.Access-Control-Allow-Origin"  = local.cors_origin
     "gatewayresponse.header.Access-Control-Allow-Headers" = "'Content-Type,Accept,X-Amz-Date,Authorization,X-Api-Key'"
     "gatewayresponse.header.Access-Control-Allow-Methods" = "'PUT,OPTIONS'"
   }
@@ -153,7 +157,7 @@ resource "aws_api_gateway_gateway_response" "default_5xx" {
   response_type = "DEFAULT_5XX"
 
   response_parameters = {
-    "gatewayresponse.header.Access-Control-Allow-Origin"  = "'*'"
+    "gatewayresponse.header.Access-Control-Allow-Origin"  = local.cors_origin
     "gatewayresponse.header.Access-Control-Allow-Headers" = "'Content-Type,Accept,X-Amz-Date,Authorization,X-Api-Key'"
     "gatewayresponse.header.Access-Control-Allow-Methods" = "'PUT,OPTIONS'"
   }

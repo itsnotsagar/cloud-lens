@@ -26,7 +26,8 @@ on:
 env:
   TF_VERSION: "1.7.0"
   TF_INPUT: false
-  PROJECT_PREFIX: "imgclass"
+  PROJECT_PREFIX: ${{ vars.PROJECT_PREFIX || 'imgclass' }}
+  UNIQUE_SUFFIX: ${{ vars.UNIQUE_SUFFIX }}
   # Determine if this is a plan-only run (PR) or apply run (manual workflow_dispatch)
   IS_PLAN_ONLY: ${{ github.event_name == 'pull_request' }}
 
@@ -64,7 +65,12 @@ jobs:
 
       - name: Terraform Init
         working-directory: terraform/azure
-        run: terraform init
+        run: |
+          terraform init \
+            -backend-config="resource_group_name=${{ env.PROJECT_PREFIX }}-tf-state-rg-${{ env.UNIQUE_SUFFIX }}" \
+            -backend-config="storage_account_name=${{ env.PROJECT_PREFIX }}tfstate${{ env.UNIQUE_SUFFIX }}" \
+            -backend-config="container_name=tfstate" \
+            -backend-config="key=azure.tfstate"
 
       - name: Terraform Plan
         working-directory: terraform/azure
@@ -100,8 +106,7 @@ jobs:
       image_bucket_arn: ${{ steps.outputs.outputs.image_bucket_arn }}
       website_url: ${{ steps.outputs.outputs.website_url }}
       api_gateway_url: ${{ steps.outputs.outputs.api_gateway_url }}
-      aws_access_key_id: ${{ steps.outputs.outputs.aws_access_key_id }}
-      aws_secret_access_key: ${{ steps.outputs.outputs.aws_secret_access_key }}
+      gcp_function_role_arn: ${{ steps.outputs.outputs.gcp_function_role_arn }}
     steps:
       - uses: actions/checkout@v4
 
@@ -112,7 +117,12 @@ jobs:
 
       - name: Terraform Init
         working-directory: terraform/aws
-        run: terraform init
+        run: |
+          terraform init \
+            -backend-config="bucket=${{ env.PROJECT_PREFIX }}-tf-state-aws-${{ env.UNIQUE_SUFFIX }}" \
+            -backend-config="key=aws/terraform.tfstate" \
+            -backend-config="region=${{ env.AWS_REGION }}" \
+            -backend-config="encrypt=true"
 
       - name: Terraform Plan
         working-directory: terraform/aws
@@ -122,6 +132,7 @@ jobs:
             -var="aws_region=${{ env.AWS_REGION }}" \
             -var="gcp_function_url=https://placeholder" \
             -var="eventbridge_auth_token=placeholder" \
+            -var="gcp_service_account_unique_id=placeholder" \
             -out=tfplan
 
       - name: Terraform Apply
@@ -138,8 +149,7 @@ jobs:
           echo "image_bucket_arn=$(terraform output -raw image_bucket_arn)" >> "$GITHUB_OUTPUT"
           echo "website_url=$(terraform output -raw website_url)" >> "$GITHUB_OUTPUT"
           echo "api_gateway_url=$(terraform output -raw api_gateway_invoke_url)" >> "$GITHUB_OUTPUT"
-          echo "aws_access_key_id=$(terraform output -raw gcp_function_aws_access_key_id)" >> "$GITHUB_OUTPUT"
-          echo "aws_secret_access_key=$(terraform output -raw gcp_function_aws_secret_access_key)" >> "$GITHUB_OUTPUT"
+          echo "gcp_function_role_arn=$(terraform output -raw gcp_function_role_arn)" >> "$GITHUB_OUTPUT"
 
   # =========================================================================
   # Step 2: Deploy GCP (Cloud Function + Secrets + Vertex AI)
@@ -153,6 +163,7 @@ jobs:
     outputs:
       function_url: ${{ steps.outputs.outputs.function_url }}
       eventbridge_auth_token: ${{ steps.outputs.outputs.eventbridge_auth_token }}
+      service_account_unique_id: ${{ steps.outputs.outputs.service_account_unique_id }}
     steps:
       - uses: actions/checkout@v4
 
@@ -168,7 +179,10 @@ jobs:
 
       - name: Terraform Init
         working-directory: terraform/gcp
-        run: terraform init
+        run: |
+          terraform init \
+            -backend-config="bucket=${{ env.PROJECT_PREFIX }}-tf-state-gcp-${{ env.UNIQUE_SUFFIX }}" \
+            -backend-config="prefix=gcp"
 
       - name: Terraform Plan
         working-directory: terraform/gcp
@@ -176,14 +190,12 @@ jobs:
           # Use placeholder values for PR plans when outputs aren't available
           if [ "${{ github.event_name }}" == "pull_request" ]; then
             S3_BUCKET="placeholder-bucket"
-            AWS_KEY_ID="placeholder-key"
-            AWS_SECRET="placeholder-secret"
+            AWS_ROLE_ARN="arn:aws:iam::000000000000:role/placeholder"
             AZURE_CONN="placeholder-connection"
             AZURE_SENDER="donotreply@placeholder.com"
           else
             S3_BUCKET="${{ needs.deploy-aws-initial.outputs.image_bucket_name }}"
-            AWS_KEY_ID="${{ needs.deploy-aws-initial.outputs.aws_access_key_id }}"
-            AWS_SECRET="${{ needs.deploy-aws-initial.outputs.aws_secret_access_key }}"
+            AWS_ROLE_ARN="${{ needs.deploy-aws-initial.outputs.gcp_function_role_arn }}"
             AZURE_CONN="${{ needs.deploy-azure.outputs.email_connection_string }}"
             AZURE_SENDER="${{ needs.deploy-azure.outputs.sender_address }}"
           fi
@@ -193,8 +205,7 @@ jobs:
             -var="gcp_project_id=${{ vars.GCP_PROJECT_ID }}" \
             -var="gcp_region=${{ vars.GCP_REGION || 'us-central1' }}" \
             -var="s3_bucket_name=${S3_BUCKET}" \
-            -var="aws_access_key_id=${AWS_KEY_ID}" \
-            -var="aws_secret_access_key=${AWS_SECRET}" \
+            -var="aws_role_arn=${AWS_ROLE_ARN}" \
             -var="aws_region=${{ env.AWS_REGION }}" \
             -var="azure_email_connection_string=${AZURE_CONN}" \
             -var="azure_sender_address=${AZURE_SENDER}" \
@@ -213,6 +224,7 @@ jobs:
         run: |
           echo "function_url=$(terraform output -raw function_url)" >> "$GITHUB_OUTPUT"
           echo "eventbridge_auth_token=$(terraform output -raw eventbridge_auth_token)" >> "$GITHUB_OUTPUT"
+          echo "service_account_unique_id=$(terraform output -raw service_account_unique_id)" >> "$GITHUB_OUTPUT"
 
       - name: Cleanup credentials
         if: always()
@@ -237,7 +249,12 @@ jobs:
 
       - name: Terraform Init
         working-directory: terraform/aws
-        run: terraform init
+        run: |
+          terraform init \
+            -backend-config="bucket=${{ env.PROJECT_PREFIX }}-tf-state-aws-${{ env.UNIQUE_SUFFIX }}" \
+            -backend-config="key=aws/terraform.tfstate" \
+            -backend-config="region=${{ env.AWS_REGION }}" \
+            -backend-config="encrypt=true"
 
       - name: Terraform Plan
         working-directory: terraform/aws
@@ -246,9 +263,11 @@ jobs:
           if [ "${{ github.event_name }}" == "pull_request" ]; then
             FUNCTION_URL="https://placeholder-function-url.com"
             AUTH_TOKEN="placeholder-token"
+            SA_UNIQUE_ID="000000000000000000000"
           else
             FUNCTION_URL="${{ needs.deploy-gcp.outputs.function_url }}"
             AUTH_TOKEN="${{ needs.deploy-gcp.outputs.eventbridge_auth_token }}"
+            SA_UNIQUE_ID="${{ needs.deploy-gcp.outputs.service_account_unique_id }}"
           fi
           
           terraform plan \
@@ -256,6 +275,7 @@ jobs:
             -var="aws_region=${{ env.AWS_REGION }}" \
             -var="gcp_function_url=${FUNCTION_URL}" \
             -var="eventbridge_auth_token=${AUTH_TOKEN}" \
+            -var="gcp_service_account_unique_id=${SA_UNIQUE_ID}" \
             -out=tfplan
 
       - name: Terraform Apply

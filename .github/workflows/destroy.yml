@@ -11,7 +11,8 @@ on:
 env:
   TF_VERSION: "1.7.0"
   TF_INPUT: false
-  PROJECT_PREFIX: "imgclass"
+  PROJECT_PREFIX: ${{ vars.PROJECT_PREFIX || 'imgclass' }}
+  UNIQUE_SUFFIX: ${{ vars.UNIQUE_SUFFIX }}
 
   # AWS credentials
   AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
@@ -60,7 +61,12 @@ jobs:
 
       - name: Terraform Init
         working-directory: terraform/aws
-        run: terraform init
+        run: |
+          terraform init \
+            -backend-config="bucket=${{ env.PROJECT_PREFIX }}-tf-state-aws-${{ env.UNIQUE_SUFFIX }}" \
+            -backend-config="key=aws/terraform.tfstate" \
+            -backend-config="region=${{ env.AWS_REGION }}" \
+            -backend-config="encrypt=true"
 
       - name: Terraform Destroy
         working-directory: terraform/aws
@@ -69,7 +75,8 @@ jobs:
             -var="project_prefix=${{ env.PROJECT_PREFIX }}" \
             -var="aws_region=${{ env.AWS_REGION }}" \
             -var="gcp_function_url=https://placeholder" \
-            -var="eventbridge_auth_token=placeholder"
+            -var="eventbridge_auth_token=placeholder" \
+            -var="gcp_service_account_unique_id=placeholder"
 
   # =========================================================================
   # Step 2: Destroy GCP (after AWS is gone)
@@ -93,7 +100,10 @@ jobs:
 
       - name: Terraform Init
         working-directory: terraform/gcp
-        run: terraform init
+        run: |
+          terraform init \
+            -backend-config="bucket=${{ env.PROJECT_PREFIX }}-tf-state-gcp-${{ env.UNIQUE_SUFFIX }}" \
+            -backend-config="prefix=gcp"
 
       - name: Terraform Destroy
         working-directory: terraform/gcp
@@ -103,8 +113,7 @@ jobs:
             -var="gcp_project_id=${{ vars.GCP_PROJECT_ID }}" \
             -var="gcp_region=${{ vars.GCP_REGION || 'us-central1' }}" \
             -var="s3_bucket_name=placeholder" \
-            -var="aws_access_key_id=placeholder" \
-            -var="aws_secret_access_key=placeholder" \
+            -var="aws_role_arn=arn:aws:iam::000000000000:role/placeholder" \
             -var="aws_region=${{ env.AWS_REGION }}" \
             -var="azure_email_connection_string=placeholder" \
             -var="azure_sender_address=placeholder" \
@@ -131,7 +140,12 @@ jobs:
 
       - name: Terraform Init
         working-directory: terraform/azure
-        run: terraform init
+        run: |
+          terraform init \
+            -backend-config="resource_group_name=${{ env.PROJECT_PREFIX }}-tf-state-rg-${{ env.UNIQUE_SUFFIX }}" \
+            -backend-config="storage_account_name=${{ env.PROJECT_PREFIX }}tfstate${{ env.UNIQUE_SUFFIX }}" \
+            -backend-config="container_name=tfstate" \
+            -backend-config="key=azure.tfstate"
 
       - name: Terraform Destroy
         working-directory: terraform/azure
