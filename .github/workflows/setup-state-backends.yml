@@ -82,8 +82,9 @@ jobs:
               --bucket "${BUCKET_NAME}" \
               --lifecycle-configuration '{
                 "Rules": [{
-                  "Id": "RetainLast10Versions",
+                  "ID": "RetainLast10Versions",
                   "Status": "Enabled",
+                  "Filter": { "Prefix": "" },
                   "NoncurrentVersionExpiration": {
                     "NewerNoncurrentVersions": 10
                   }
@@ -115,7 +116,7 @@ jobs:
           BUCKET_NAME="${{ env.PROJECT_PREFIX }}-tf-state-${{ vars.GCP_PROJECT_ID }}"
           
           # Check if bucket exists
-          if ! gsutil ls -b "gs://${BUCKET_NAME}" 2>&1 | grep -q "${BUCKET_NAME}"; then
+          if ! gsutil ls -b "gs://${BUCKET_NAME}" &>/dev/null; then
             echo "Creating GCS bucket: ${BUCKET_NAME}"
             
             gsutil mb \

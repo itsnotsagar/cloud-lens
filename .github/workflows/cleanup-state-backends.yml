@@ -116,7 +116,7 @@ jobs:
           BUCKET_NAME="${{ env.PROJECT_PREFIX }}-tf-state-${{ vars.GCP_PROJECT_ID }}"
           
           # Check if bucket exists
-          if ! gsutil ls -b "gs://${BUCKET_NAME}" 2>&1 | grep -q "${BUCKET_NAME}"; then
+          if ! gsutil ls -b "gs://${BUCKET_NAME}" &>/dev/null; then
             echo "ℹ️  Bucket does not exist: ${BUCKET_NAME}"
             exit 0
           fi
