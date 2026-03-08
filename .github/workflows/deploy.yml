@@ -297,6 +297,13 @@ jobs:
         working-directory: terraform/aws
         run: terraform apply -auto-approve tfplan
 
+      - name: Invalidate CloudFront Cache
+        if: github.event_name != 'pull_request' && github.event.inputs.action != 'plan'
+        working-directory: terraform/aws
+        run: |
+          DIST_ID=$(terraform output -raw cloudfront_distribution_id)
+          aws cloudfront create-invalidation --distribution-id "$DIST_ID" --paths "/*"
+
   # =========================================================================
   # Summary
   # =========================================================================
@@ -329,7 +336,7 @@ jobs:
 
           if [ "${{ needs.deploy-aws-initial.result }}" == "success" ] && [ "${{ github.event_name }}" != "pull_request" ]; then
             echo "### Endpoints" >> "$GITHUB_STEP_SUMMARY"
-            echo "- **Website:** http://${{ needs.deploy-aws-initial.outputs.website_url }}" >> "$GITHUB_STEP_SUMMARY"
+            echo "- **Website:** ${{ needs.deploy-aws-initial.outputs.website_url }}" >> "$GITHUB_STEP_SUMMARY"
             echo "- **API Gateway:** ${{ needs.deploy-aws-initial.outputs.api_gateway_url }}" >> "$GITHUB_STEP_SUMMARY"
           fi
 

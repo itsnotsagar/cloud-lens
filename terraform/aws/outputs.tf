@@ -9,8 +9,13 @@ output "image_bucket_arn" {
 }
 
 output "website_url" {
-  description = "URL of the static website"
-  value       = aws_s3_bucket_website_configuration.website.website_endpoint
+  description = "URL of the static website (CloudFront HTTPS)"
+  value       = "https://${aws_cloudfront_distribution.website.domain_name}"
+}
+
+output "cloudfront_distribution_id" {
+  description = "CloudFront distribution ID for cache invalidation"
+  value       = aws_cloudfront_distribution.website.id
 }
 
 output "api_gateway_invoke_url" {

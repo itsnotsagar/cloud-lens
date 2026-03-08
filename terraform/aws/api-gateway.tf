@@ -3,7 +3,7 @@
 # =============================================================================
 
 locals {
-  cors_origin = "'http://${aws_s3_bucket_website_configuration.website.website_endpoint}'"
+  cors_origin = "'https://${aws_cloudfront_distribution.website.domain_name}'"
 }
 
 resource "aws_api_gateway_rest_api" "main" {
