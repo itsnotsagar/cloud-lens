@@ -86,6 +86,7 @@ jobs:
                   "Status": "Enabled",
                   "Filter": { "Prefix": "" },
                   "NoncurrentVersionExpiration": {
+                    "NoncurrentDays": 1,
                     "NewerNoncurrentVersions": 10
                   }
                 }]
