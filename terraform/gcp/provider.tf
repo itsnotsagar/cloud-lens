@@ -1,10 +1,8 @@
 terraform {
   required_version = ">= 1.5.0"
 
-  backend "gcs" {
-    bucket = "imgclass-tf-state-gcp"
-    prefix = "gcp"
-  }
+  # Backend configured via -backend-config during terraform init
+  backend "gcs" {}
 
   required_providers {
     google = {

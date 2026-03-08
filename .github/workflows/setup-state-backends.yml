@@ -9,10 +9,10 @@ on:
         type: string
 
 env:
-  PROJECT_PREFIX: "imgclass"
-  AWS_REGION: "us-east-1"
-  GCP_REGION: "us-central1"
-  AZURE_LOCATION: "eastus"
+  PROJECT_PREFIX: ${{ vars.PROJECT_PREFIX || 'imgclass' }}
+  AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+  GCP_REGION: ${{ vars.GCP_REGION || 'us-central1' }}
+  AZURE_LOCATION: ${{ vars.AZURE_LOCATION || 'eastus' }}
 
 jobs:
   validate:
@@ -44,7 +44,8 @@ jobs:
 
       - name: Create S3 Bucket for Terraform State
         run: |
-          BUCKET_NAME="${{ env.PROJECT_PREFIX }}-tf-state-aws"
+          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+          BUCKET_NAME="${{ env.PROJECT_PREFIX }}-tf-state-${ACCOUNT_ID}"
           
           # Check if bucket exists
           if aws s3 ls "s3://${BUCKET_NAME}" 2>&1 | grep -q 'NoSuchBucket'; then
@@ -81,9 +82,11 @@ jobs:
               --bucket "${BUCKET_NAME}" \
               --lifecycle-configuration '{
                 "Rules": [{
-                  "Id": "RetainLast10Versions",
+                  "ID": "RetainLast10Versions",
                   "Status": "Enabled",
+                  "Filter": { "Prefix": "" },
                   "NoncurrentVersionExpiration": {
+                    "NoncurrentDays": 1,
                     "NewerNoncurrentVersions": 10
                   }
                 }]
@@ -111,10 +114,10 @@ jobs:
 
       - name: Create GCS Bucket for Terraform State
         run: |
-          BUCKET_NAME="${{ env.PROJECT_PREFIX }}-tf-state-gcp"
+          BUCKET_NAME="${{ env.PROJECT_PREFIX }}-tf-state-${{ vars.GCP_PROJECT_ID }}"
           
           # Check if bucket exists
-          if ! gsutil ls -b "gs://${BUCKET_NAME}" 2>&1 | grep -q "${BUCKET_NAME}"; then
+          if ! gsutil ls -b "gs://${BUCKET_NAME}" &>/dev/null; then
             echo "Creating GCS bucket: ${BUCKET_NAME}"
             
             gsutil mb \
@@ -178,12 +181,18 @@ jobs:
 
       - name: Create Azure Storage for Terraform State
         run: |
-          RG_NAME="${{ env.PROJECT_PREFIX }}-tf-state-rg"
-          STORAGE_ACCOUNT="${{ env.PROJECT_PREFIX }}tfstate"
+          SUB_SHORT=$(echo "$ARM_SUBSCRIPTION_ID" | tr -d '-' | cut -c1-8)
+          RG_NAME="${{ env.PROJECT_PREFIX }}-tf-state-rg-${SUB_SHORT}"
+          STORAGE_ACCOUNT="${{ env.PROJECT_PREFIX }}tf${SUB_SHORT}"
           CONTAINER_NAME="tfstate"
           
-          # Check if resource group exists
-          if ! az group show --name "${RG_NAME}" &>/dev/null; then
+          # Create or ensure resource group is ready
+          RG_STATE=$(az group show --name "${RG_NAME}" --query "properties.provisioningState" -o tsv 2>/dev/null || echo "NotFound")
+          if [ "$RG_STATE" = "NotFound" ] || [ "$RG_STATE" = "Deleting" ]; then
+            if [ "$RG_STATE" = "Deleting" ]; then
+              echo "⏳ Resource group is still being deleted, waiting..."
+              az group wait --name "${RG_NAME}" --deleted --timeout 300 2>/dev/null || true
+            fi
             echo "Creating resource group: ${RG_NAME}"
             az group create \
               --name "${RG_NAME}" \
@@ -255,9 +264,9 @@ jobs:
           echo "" >> "$GITHUB_STEP_SUMMARY"
           echo "| Provider | Status | Backend Location |" >> "$GITHUB_STEP_SUMMARY"
           echo "|----------|--------|------------------|" >> "$GITHUB_STEP_SUMMARY"
-          echo "| AWS | ${{ needs.setup-aws-backend.result }} | s3://${{ env.PROJECT_PREFIX }}-tf-state-aws |" >> "$GITHUB_STEP_SUMMARY"
-          echo "| GCP | ${{ needs.setup-gcp-backend.result }} | gs://${{ env.PROJECT_PREFIX }}-tf-state-gcp |" >> "$GITHUB_STEP_SUMMARY"
-          echo "| Azure | ${{ needs.setup-azure-backend.result }} | ${{ env.PROJECT_PREFIX }}tfstate/tfstate |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| AWS | ${{ needs.setup-aws-backend.result }} | s3://${{ env.PROJECT_PREFIX }}-tf-state-<account-id> |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| GCP | ${{ needs.setup-gcp-backend.result }} | gs://${{ env.PROJECT_PREFIX }}-tf-state-${{ vars.GCP_PROJECT_ID }} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Azure | ${{ needs.setup-azure-backend.result }} | ${{ env.PROJECT_PREFIX }}tf<sub-short>/tfstate |" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
           echo "### Features Enabled" >> "$GITHUB_STEP_SUMMARY"
           echo "- ✅ Versioning enabled on all backends" >> "$GITHUB_STEP_SUMMARY"

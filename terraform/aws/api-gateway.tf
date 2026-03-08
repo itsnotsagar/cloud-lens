@@ -2,11 +2,15 @@
 # API Gateway — proxies PUT requests to S3
 # =============================================================================
 
+locals {
+  cors_origin = "'https://${aws_cloudfront_distribution.website.domain_name}'"
+}
+
 resource "aws_api_gateway_rest_api" "main" {
   name        = "${var.project_prefix}-api"
   description = "API Gateway to proxy image uploads to S3"
 
-  binary_media_types = ["*/*"]
+  binary_media_types = ["image/*"]
 
   endpoint_configuration {
     types = ["REGIONAL"]
@@ -50,6 +54,7 @@ resource "aws_api_gateway_integration" "put_s3" {
   type                    = "AWS"
   uri                     = "arn:aws:apigateway:${var.aws_region}:s3:path/${aws_s3_bucket.images.id}/{filename}"
   credentials             = aws_iam_role.api_gateway_s3.arn
+  content_handling        = "CONVERT_TO_BINARY"
 
   request_parameters = {
     "integration.request.path.filename"       = "method.request.path.filename"
@@ -77,14 +82,14 @@ resource "aws_api_gateway_integration_response" "put_200" {
   status_code = aws_api_gateway_method_response.put_200.status_code
 
   response_parameters = {
-    "method.response.header.Access-Control-Allow-Origin" = "'*'"
+    "method.response.header.Access-Control-Allow-Origin" = local.cors_origin
   }
 
   depends_on = [aws_api_gateway_integration.put_s3]
 }
 
 # =============================================================================
-# CORS: Lambda-backed OPTIONS
+# CORS: Mock-backed OPTIONS (no Lambda needed)
 # =============================================================================
 
 resource "aws_api_gateway_method" "options_upload" {
@@ -95,12 +100,44 @@ resource "aws_api_gateway_method" "options_upload" {
 }
 
 resource "aws_api_gateway_integration" "options_upload" {
-  rest_api_id             = aws_api_gateway_rest_api.main.id
-  resource_id             = aws_api_gateway_resource.upload_filename.id
-  http_method             = aws_api_gateway_method.options_upload.http_method
-  integration_http_method = "POST"
-  type                    = "AWS_PROXY"
-  uri                     = aws_lambda_function.cors.invoke_arn
+  rest_api_id = aws_api_gateway_rest_api.main.id
+  resource_id = aws_api_gateway_resource.upload_filename.id
+  http_method = aws_api_gateway_method.options_upload.http_method
+  type        = "MOCK"
+
+  passthrough_behavior = "WHEN_NO_MATCH"
+
+  request_templates = {
+    "application/json" = "{\"statusCode\": 200}"
+  }
+}
+
+resource "aws_api_gateway_method_response" "options_200" {
+  rest_api_id = aws_api_gateway_rest_api.main.id
+  resource_id = aws_api_gateway_resource.upload_filename.id
+  http_method = aws_api_gateway_method.options_upload.http_method
+  status_code = "200"
+
+  response_parameters = {
+    "method.response.header.Access-Control-Allow-Origin"  = true
+    "method.response.header.Access-Control-Allow-Methods" = true
+    "method.response.header.Access-Control-Allow-Headers" = true
+  }
+}
+
+resource "aws_api_gateway_integration_response" "options_200" {
+  rest_api_id = aws_api_gateway_rest_api.main.id
+  resource_id = aws_api_gateway_resource.upload_filename.id
+  http_method = aws_api_gateway_method.options_upload.http_method
+  status_code = aws_api_gateway_method_response.options_200.status_code
+
+  response_parameters = {
+    "method.response.header.Access-Control-Allow-Origin"  = local.cors_origin
+    "method.response.header.Access-Control-Allow-Methods" = "'PUT,OPTIONS'"
+    "method.response.header.Access-Control-Allow-Headers" = "'Content-Type,Accept,X-Amz-Date,Authorization,X-Api-Key'"
+  }
+
+  depends_on = [aws_api_gateway_integration.options_upload]
 }
 
 # =============================================================================
@@ -112,7 +149,7 @@ resource "aws_api_gateway_gateway_response" "default_4xx" {
   response_type = "DEFAULT_4XX"
 
   response_parameters = {
-    "gatewayresponse.header.Access-Control-Allow-Origin"  = "'*'"
+    "gatewayresponse.header.Access-Control-Allow-Origin"  = local.cors_origin
     "gatewayresponse.header.Access-Control-Allow-Headers" = "'Content-Type,Accept,X-Amz-Date,Authorization,X-Api-Key'"
     "gatewayresponse.header.Access-Control-Allow-Methods" = "'PUT,OPTIONS'"
   }
@@ -123,7 +160,7 @@ resource "aws_api_gateway_gateway_response" "default_5xx" {
   response_type = "DEFAULT_5XX"
 
   response_parameters = {
-    "gatewayresponse.header.Access-Control-Allow-Origin"  = "'*'"
+    "gatewayresponse.header.Access-Control-Allow-Origin"  = local.cors_origin
     "gatewayresponse.header.Access-Control-Allow-Headers" = "'Content-Type,Accept,X-Amz-Date,Authorization,X-Api-Key'"
     "gatewayresponse.header.Access-Control-Allow-Methods" = "'PUT,OPTIONS'"
   }
@@ -137,7 +174,6 @@ resource "aws_api_gateway_deployment" "main" {
   rest_api_id = aws_api_gateway_rest_api.main.id
 
   triggers = {
-    # Trigger redeployment when API configuration or response parameters change
     redeployment = sha1(jsonencode([
       aws_api_gateway_method.put_upload.id,
       aws_api_gateway_integration.put_s3.id,
@@ -146,6 +182,8 @@ resource "aws_api_gateway_deployment" "main" {
       aws_api_gateway_integration_response.put_200.response_parameters,
       aws_api_gateway_method.options_upload.id,
       aws_api_gateway_integration.options_upload.id,
+      aws_api_gateway_method_response.options_200.id,
+      aws_api_gateway_integration_response.options_200.response_parameters,
       aws_api_gateway_gateway_response.default_4xx.response_parameters,
       aws_api_gateway_gateway_response.default_5xx.response_parameters,
     ]))
@@ -159,7 +197,7 @@ resource "aws_api_gateway_deployment" "main" {
     aws_api_gateway_integration.put_s3,
     aws_api_gateway_integration_response.put_200,
     aws_api_gateway_integration.options_upload,
-    aws_lambda_function.cors,
+    aws_api_gateway_integration_response.options_200,
     aws_api_gateway_gateway_response.default_4xx,
     aws_api_gateway_gateway_response.default_5xx,
   ]

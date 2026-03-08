@@ -4,7 +4,9 @@ import logging
 import os
 import re
 import time
+from datetime import datetime, timedelta, timezone
 from html import escape as html_escape
+from urllib.request import Request, urlopen
 
 import boto3
 import functions_framework
@@ -22,10 +24,13 @@ logger.setLevel(logging.INFO)
 # Environment variables (non-sensitive)
 S3_BUCKET_NAME = os.environ.get("S3_BUCKET_NAME", "")
 AWS_REGION = os.environ.get("AWS_REGION", "us-east-1")
+AWS_ROLE_ARN = os.environ.get("AWS_ROLE_ARN", "")
 NOTIFICATION_EMAIL = os.environ.get("NOTIFICATION_EMAIL", "")
 GCP_PROJECT_ID = os.environ.get("GCP_PROJECT_ID", "")
 GCP_LOCATION = os.environ.get("GCP_LOCATION", "us-central1")
 AUTH_TOKEN_SECRET_ID = os.environ.get("AUTH_TOKEN_SECRET_ID", "")
+AZURE_EMAIL_CONN_SECRET_ID = os.environ.get("AZURE_EMAIL_CONN_SECRET_ID", "")
+AZURE_SENDER_SECRET_ID = os.environ.get("AZURE_SENDER_SECRET_ID", "")
 
 # Secret Manager client (initialized once)
 secret_client = secretmanager.SecretManagerServiceClient()
@@ -33,6 +38,7 @@ secret_client = secretmanager.SecretManagerServiceClient()
 # Cache for secrets and clients (avoid repeated API calls and initialization)
 _secrets_cache = {}
 _s3_client = None
+_s3_credentials_expiry = None
 _email_client = None
 _gemini_model = None
 _processed_images = {}  # Cache to prevent duplicate processing
@@ -41,10 +47,13 @@ _processed_images = {}  # Cache to prevent duplicate processing
 REQUIRED_ENV_VARS = [
     "S3_BUCKET_NAME",
     "AWS_REGION",
+    "AWS_ROLE_ARN",
     "NOTIFICATION_EMAIL",
     "GCP_PROJECT_ID",
     "GCP_LOCATION",
-    "AUTH_TOKEN_SECRET_ID"
+    "AUTH_TOKEN_SECRET_ID",
+    "AZURE_EMAIL_CONN_SECRET_ID",
+    "AZURE_SENDER_SECRET_ID"
 ]
 
 def validate_environment():
@@ -56,8 +65,16 @@ def validate_environment():
 # Validate at module load time
 validate_environment()
 
-# Allowed image extensions
+# Allowed image extensions and their magic bytes
 ALLOWED_EXTENSIONS = {"jpg", "jpeg", "png", "webp"}
+IMAGE_MAGIC_BYTES = {
+    b"\xff\xd8\xff": "jpeg",
+    b"\x89PNG": "png",
+    b"RIFF": "webp",  # WebP starts with RIFF....WEBP
+}
+MAX_IMAGE_SIZE = 10 * 1024 * 1024  # 10 MB
+MAX_CLASSIFICATION_LENGTH = 2000
+CACHE_MAX_AGE_SECONDS = 300  # 5 minutes
 
 def _is_valid_s3_key(key: str) -> bool:
     """Validate S3 key to prevent path traversal and restrict to image files."""
@@ -140,11 +157,10 @@ def classify_image(request):
         # Mark as processing
         _processed_images[image_id] = current_time
         
-        # Clean up old entries (keep only last 100)
-        if len(_processed_images) > 100:
-            sorted_items = sorted(_processed_images.items(), key=lambda x: x[1])
-            _processed_images.clear()
-            _processed_images.update(dict(sorted_items[-50:]))
+        # Clean up entries older than CACHE_MAX_AGE_SECONDS
+        expired = [k for k, v in _processed_images.items() if current_time - v > CACHE_MAX_AGE_SECONDS]
+        for k in expired:
+            del _processed_images[k]
 
         logger.info("Processing image: s3://%s/%s", bucket, key)
 
@@ -171,27 +187,63 @@ def classify_image(request):
         return json.dumps({"error": "Internal server error"}), 500
 
 
+def _get_google_id_token(audience: str) -> str:
+    """Fetch a Google-signed OIDC identity token from the metadata server."""
+    url = (
+        "http://metadata.google.internal/computeMetadata/v1/"
+        f"instance/service-accounts/default/identity?audience={audience}&format=full"
+    )
+    req = Request(url, headers={"Metadata-Flavor": "Google"})
+    with urlopen(req, timeout=5) as resp:
+        return resp.read().decode("utf-8")
+
+
 def get_s3_client():
-    """Get or create cached S3 client."""
-    global _s3_client
-    if _s3_client is None:
-        aws_access_key_id = get_secret("imgclass-aws-access-key-id")
-        aws_secret_access_key = get_secret("imgclass-aws-secret-access-key")
-        
-        config = Config(
-            connect_timeout=10,
-            read_timeout=30,
-            retries={'max_attempts': 3, 'mode': 'standard'}
-        )
-        
-        _s3_client = boto3.client(
-            "s3",
-            aws_access_key_id=aws_access_key_id,
-            aws_secret_access_key=aws_secret_access_key,
-            region_name=AWS_REGION,
-            config=config
-        )
+    """Get or create cached S3 client using Workload Identity Federation."""
+    global _s3_client, _s3_credentials_expiry
+
+    # Reuse cached client if credentials haven't expired (with 60s buffer)
+    if _s3_client is not None and _s3_credentials_expiry is not None:
+        if datetime.now(timezone.utc) < _s3_credentials_expiry:
+            return _s3_client
+
+    # Get Google OIDC token and exchange for AWS temporary credentials
+    google_token = _get_google_id_token("sts.amazonaws.com")
+
+    sts_client = boto3.client("sts", region_name=AWS_REGION)
+    response = sts_client.assume_role_with_web_identity(
+        RoleArn=AWS_ROLE_ARN,
+        RoleSessionName="classify-function",
+        WebIdentityToken=google_token,
+        DurationSeconds=900,
+    )
+
+    creds = response["Credentials"]
+    _s3_credentials_expiry = creds["Expiration"].replace(tzinfo=timezone.utc) - timedelta(seconds=60)
+
+    config = Config(
+        connect_timeout=10,
+        read_timeout=30,
+        retries={"max_attempts": 3, "mode": "standard"},
+    )
+
+    _s3_client = boto3.client(
+        "s3",
+        aws_access_key_id=creds["AccessKeyId"],
+        aws_secret_access_key=creds["SecretAccessKey"],
+        aws_session_token=creds["SessionToken"],
+        region_name=AWS_REGION,
+        config=config,
+    )
     return _s3_client
+
+
+def _validate_image_magic_bytes(image_bytes: bytes) -> bool:
+    """Validate that the file content matches a known image format via magic bytes."""
+    for magic, _ in IMAGE_MAGIC_BYTES.items():
+        if image_bytes[:len(magic)] == magic:
+            return True
+    return False
 
 
 def download_from_s3(bucket: str, key: str) -> bytes:
@@ -204,18 +256,20 @@ def download_from_s3(bucket: str, key: str) -> bytes:
     
     for attempt in range(max_retries):
         try:
-            # Download directly without head request (saves one API call)
+            # Check size before downloading to prevent memory exhaustion
+            head = s3_client.head_object(Bucket=bucket, Key=key)
+            content_length = head.get("ContentLength", 0)
+            if content_length > MAX_IMAGE_SIZE:
+                raise ValueError(f"Image too large: {content_length} bytes (max {MAX_IMAGE_SIZE} bytes)")
+
             response = s3_client.get_object(Bucket=bucket, Key=key)
             image_bytes = response["Body"].read()
+
+            # Validate magic bytes to ensure it's actually an image
+            if not _validate_image_magic_bytes(image_bytes):
+                raise ValueError("File content does not match a supported image format")
             
-            # Validate size after download
-            size = len(image_bytes)
-            max_size = 10 * 1024 * 1024  # 10 MB
-            
-            if size > max_size:
-                raise ValueError(f"Image too large: {size} bytes (max {max_size} bytes)")
-            
-            logger.info("Downloaded %d bytes from S3", size)
+            logger.info("Downloaded %d bytes from S3", len(image_bytes))
             return image_bytes
             
         except s3_client.exceptions.NoSuchKey:
@@ -272,14 +326,17 @@ def classify_with_gemini(image_bytes: bytes, filename: str) -> str:
     response = model.generate_content(
         [image_part, prompt],
     )
-    return response.text
+    result = response.text
+    if len(result) > MAX_CLASSIFICATION_LENGTH:
+        result = result[:MAX_CLASSIFICATION_LENGTH] + "..."
+    return result
 
 
 def get_email_client():
     """Get or create cached email client."""
     global _email_client
     if _email_client is None:
-        azure_email_conn_str = get_secret("imgclass-azure-email-connection-string")
+        azure_email_conn_str = get_secret(AZURE_EMAIL_CONN_SECRET_ID)
         _email_client = EmailClient.from_connection_string(azure_email_conn_str)
     return _email_client
 
@@ -293,7 +350,7 @@ def send_email(image_name: str, classification: str) -> bool:
         return False
 
     try:
-        azure_sender_address = get_secret("imgclass-azure-sender-address")
+        azure_sender_address = get_secret(AZURE_SENDER_SECRET_ID)
         email_client = get_email_client()
 
         # Escape user-controlled content to prevent HTML injection
@@ -321,11 +378,24 @@ def send_email(image_name: str, classification: str) -> bool:
             },
         }
 
-        poller = email_client.begin_send(message)
-        result = poller.result(timeout=30)
-        logger.info("Email sent successfully")
-        return True
+        # Retry with exponential backoff for transient failures
+        last_error = None
+        for attempt in range(3):
+            try:
+                poller = email_client.begin_send(message)
+                poller.result(timeout=30)
+                logger.info("Email sent successfully")
+                return True
+            except Exception as e:
+                last_error = e
+                if attempt < 2:
+                    wait = 2 ** attempt
+                    logger.warning("Email send attempt %d failed, retrying in %ds: %s", attempt + 1, wait, e)
+                    time.sleep(wait)
+
+        logger.exception("Failed to send email after 3 attempts: %s", last_error)
+        return False
 
     except Exception as e:
-        logger.exception("Failed to send email")
+        logger.exception("Failed to prepare email")
         return False

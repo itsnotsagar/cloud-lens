@@ -68,64 +68,56 @@ resource "aws_iam_role_policy" "api_gateway_s3" {
 }
 
 # =============================================================================
-# IAM Role for CORS Lambda
+# OIDC Provider for GCP Workload Identity Federation
 # =============================================================================
 
-resource "aws_iam_role" "cors_lambda" {
-  name = "${var.project_prefix}-cors-lambda-role"
+resource "aws_iam_openid_connect_provider" "gcp" {
+  url             = "https://accounts.google.com"
+  client_id_list  = [var.gcp_service_account_unique_id]
+  thumbprint_list = ["08745487e891c19e3078c1f2a07e452950ef36f6"]
+}
+
+# =============================================================================
+# IAM Role for GCP Function (S3 Read-Only via Workload Identity Federation)
+# =============================================================================
+
+resource "aws_iam_role" "gcp_function_s3_reader" {
+  name = "${var.project_prefix}-gcp-function-s3-reader-role"
 
   assume_role_policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [{
-      Action = "sts:AssumeRole"
-      Effect = "Allow"
-      Principal = {
-        Service = "lambda.amazonaws.com"
-      }
-    }]
-  })
-}
-
-resource "aws_iam_role_policy_attachment" "cors_lambda_basic" {
-  role       = aws_iam_role.cors_lambda.name
-  policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
-}
-
-# =============================================================================
-# Restricted IAM User for GCP Function (S3 Read-Only Access)
-# =============================================================================
-
-resource "aws_iam_user" "gcp_function_s3_reader" {
-  name = "${var.project_prefix}-gcp-function-s3-reader"
-}
-
-resource "aws_iam_user_policy" "gcp_function_s3_reader" {
-  name = "${var.project_prefix}-s3-read-only"
-  user = aws_iam_user.gcp_function_s3_reader.name
-
-  policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
       {
         Effect = "Allow"
-        Action = [
-          "s3:GetObject"
-        ]
-        Resource = "${aws_s3_bucket.images.arn}/*"
-      },
-      {
-        Effect = "Allow"
-        Action = [
-          "s3:ListBucket"
-        ]
-        Resource = aws_s3_bucket.images.arn
+        Action = "sts:AssumeRoleWithWebIdentity"
+        Principal = {
+          Federated = aws_iam_openid_connect_provider.gcp.arn
+        }
+        Condition = {
+          StringEquals = {
+            "accounts.google.com:sub" = var.gcp_service_account_unique_id
+            "accounts.google.com:aud" = var.gcp_service_account_unique_id
+          }
+        }
       }
     ]
   })
 }
 
-resource "aws_iam_access_key" "gcp_function_s3_reader" {
-  user = aws_iam_user.gcp_function_s3_reader.name
+resource "aws_iam_role_policy" "gcp_function_s3_reader" {
+  name = "${var.project_prefix}-gcp-s3-read-only"
+  role = aws_iam_role.gcp_function_s3_reader.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect   = "Allow"
+        Action   = "s3:GetObject"
+        Resource = "${aws_s3_bucket.images.arn}/*"
+      }
+    ]
+  })
 }
 
 # =============================================================================

@@ -14,8 +14,8 @@ on:
         default: false
 
 env:
-  PROJECT_PREFIX: "imgclass"
-  AWS_REGION: "us-east-1"
+  PROJECT_PREFIX: ${{ vars.PROJECT_PREFIX || 'imgclass' }}
+  AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
 
 jobs:
   validate:
@@ -52,7 +52,8 @@ jobs:
 
       - name: Check and Delete S3 Bucket
         run: |
-          BUCKET_NAME="${{ env.PROJECT_PREFIX }}-tf-state-aws"
+          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+          BUCKET_NAME="${{ env.PROJECT_PREFIX }}-tf-state-${ACCOUNT_ID}"
           
           # Check if bucket exists
           if aws s3 ls "s3://${BUCKET_NAME}" 2>&1 | grep -q 'NoSuchBucket'; then
@@ -112,10 +113,10 @@ jobs:
 
       - name: Check and Delete GCS Bucket
         run: |
-          BUCKET_NAME="${{ env.PROJECT_PREFIX }}-tf-state-gcp"
+          BUCKET_NAME="${{ env.PROJECT_PREFIX }}-tf-state-${{ vars.GCP_PROJECT_ID }}"
           
           # Check if bucket exists
-          if ! gsutil ls -b "gs://${BUCKET_NAME}" 2>&1 | grep -q "${BUCKET_NAME}"; then
+          if ! gsutil ls -b "gs://${BUCKET_NAME}" &>/dev/null; then
             echo "ℹ️  Bucket does not exist: ${BUCKET_NAME}"
             exit 0
           fi
@@ -173,8 +174,9 @@ jobs:
 
       - name: Check and Delete Azure Storage
         run: |
-          RG_NAME="${{ env.PROJECT_PREFIX }}-tf-state-rg"
-          STORAGE_ACCOUNT="${{ env.PROJECT_PREFIX }}tfstate"
+          SUB_SHORT=$(echo "$ARM_SUBSCRIPTION_ID" | tr -d '-' | cut -c1-8)
+          RG_NAME="${{ env.PROJECT_PREFIX }}-tf-state-rg-${SUB_SHORT}"
+          STORAGE_ACCOUNT="${{ env.PROJECT_PREFIX }}tf${SUB_SHORT}"
           CONTAINER_NAME="tfstate"
           
           # Check if resource group exists
@@ -243,9 +245,9 @@ jobs:
           echo "" >> "$GITHUB_STEP_SUMMARY"
           echo "| Provider | Status | Action |" >> "$GITHUB_STEP_SUMMARY"
           echo "|----------|--------|--------|" >> "$GITHUB_STEP_SUMMARY"
-          echo "| AWS | ${{ needs.cleanup-aws-backend.result }} | Deleted s3://${{ env.PROJECT_PREFIX }}-tf-state-aws |" >> "$GITHUB_STEP_SUMMARY"
-          echo "| GCP | ${{ needs.cleanup-gcp-backend.result }} | Deleted gs://${{ env.PROJECT_PREFIX }}-tf-state-gcp |" >> "$GITHUB_STEP_SUMMARY"
-          echo "| Azure | ${{ needs.cleanup-azure-backend.result }} | Deleted ${{ env.PROJECT_PREFIX }}-tf-state-rg |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| AWS | ${{ needs.cleanup-aws-backend.result }} | Deleted s3://${{ env.PROJECT_PREFIX }}-tf-state-<account-id> |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| GCP | ${{ needs.cleanup-gcp-backend.result }} | Deleted gs://${{ env.PROJECT_PREFIX }}-tf-state-${{ vars.GCP_PROJECT_ID }} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Azure | ${{ needs.cleanup-azure-backend.result }} | Deleted ${{ env.PROJECT_PREFIX }}tf<sub-short>/tfstate |" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
           
           if [ "${{ github.event.inputs.force_delete }}" == "true" ]; then
