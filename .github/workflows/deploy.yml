@@ -27,7 +27,6 @@ env:
   TF_VERSION: "1.7.0"
   TF_INPUT: false
   PROJECT_PREFIX: ${{ vars.PROJECT_PREFIX || 'imgclass' }}
-  UNIQUE_SUFFIX: ${{ vars.UNIQUE_SUFFIX }}
   # Determine if this is a plan-only run (PR) or apply run (manual workflow_dispatch)
   IS_PLAN_ONLY: ${{ github.event_name == 'pull_request' }}
 
@@ -63,12 +62,19 @@ jobs:
           terraform_version: ${{ env.TF_VERSION }}
           terraform_wrapper: false
 
+      - name: Derive Azure backend names
+        id: backend
+        run: |
+          SUB_SHORT=$(echo "$ARM_SUBSCRIPTION_ID" | tr -d '-' | cut -c1-8)
+          echo "rg_name=${{ env.PROJECT_PREFIX }}-tf-state-rg-${SUB_SHORT}" >> "$GITHUB_OUTPUT"
+          echo "storage_account=${{ env.PROJECT_PREFIX }}tf${SUB_SHORT}" >> "$GITHUB_OUTPUT"
+
       - name: Terraform Init
         working-directory: terraform/azure
         run: |
           terraform init \
-            -backend-config="resource_group_name=${{ env.PROJECT_PREFIX }}-tf-state-rg-${{ env.UNIQUE_SUFFIX }}" \
-            -backend-config="storage_account_name=${{ env.PROJECT_PREFIX }}tfstate${{ env.UNIQUE_SUFFIX }}" \
+            -backend-config="resource_group_name=${{ steps.backend.outputs.rg_name }}" \
+            -backend-config="storage_account_name=${{ steps.backend.outputs.storage_account }}" \
             -backend-config="container_name=tfstate" \
             -backend-config="key=azure.tfstate"
 
@@ -115,11 +121,15 @@ jobs:
           terraform_version: ${{ env.TF_VERSION }}
           terraform_wrapper: false
 
+      - name: Get AWS Account ID
+        id: aws-id
+        run: echo "account_id=$(aws sts get-caller-identity --query Account --output text)" >> "$GITHUB_OUTPUT"
+
       - name: Terraform Init
         working-directory: terraform/aws
         run: |
           terraform init \
-            -backend-config="bucket=${{ env.PROJECT_PREFIX }}-tf-state-aws-${{ env.UNIQUE_SUFFIX }}" \
+            -backend-config="bucket=${{ env.PROJECT_PREFIX }}-tf-state-${{ steps.aws-id.outputs.account_id }}" \
             -backend-config="key=aws/terraform.tfstate" \
             -backend-config="region=${{ env.AWS_REGION }}" \
             -backend-config="encrypt=true"
@@ -181,7 +191,7 @@ jobs:
         working-directory: terraform/gcp
         run: |
           terraform init \
-            -backend-config="bucket=${{ env.PROJECT_PREFIX }}-tf-state-gcp-${{ env.UNIQUE_SUFFIX }}" \
+            -backend-config="bucket=${{ env.PROJECT_PREFIX }}-tf-state-${{ vars.GCP_PROJECT_ID }}" \
             -backend-config="prefix=gcp"
 
       - name: Terraform Plan
@@ -247,11 +257,15 @@ jobs:
           terraform_version: ${{ env.TF_VERSION }}
           terraform_wrapper: false
 
+      - name: Get AWS Account ID
+        id: aws-id
+        run: echo "account_id=$(aws sts get-caller-identity --query Account --output text)" >> "$GITHUB_OUTPUT"
+
       - name: Terraform Init
         working-directory: terraform/aws
         run: |
           terraform init \
-            -backend-config="bucket=${{ env.PROJECT_PREFIX }}-tf-state-aws-${{ env.UNIQUE_SUFFIX }}" \
+            -backend-config="bucket=${{ env.PROJECT_PREFIX }}-tf-state-${{ steps.aws-id.outputs.account_id }}" \
             -backend-config="key=aws/terraform.tfstate" \
             -backend-config="region=${{ env.AWS_REGION }}" \
             -backend-config="encrypt=true"

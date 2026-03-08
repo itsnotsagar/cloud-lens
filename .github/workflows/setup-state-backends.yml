@@ -10,7 +10,6 @@ on:
 
 env:
   PROJECT_PREFIX: ${{ vars.PROJECT_PREFIX || 'imgclass' }}
-  UNIQUE_SUFFIX: ${{ vars.UNIQUE_SUFFIX }}
   AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
   GCP_REGION: ${{ vars.GCP_REGION || 'us-central1' }}
   AZURE_LOCATION: ${{ vars.AZURE_LOCATION || 'eastus' }}
@@ -26,14 +25,7 @@ jobs:
             echo "❌ Confirmation failed. Please type 'create' to proceed."
             exit 1
           fi
-          if [ -z "${{ vars.UNIQUE_SUFFIX }}" ]; then
-            echo "❌ Repository variable UNIQUE_SUFFIX is not set."
-            echo "   Go to Settings → Secrets and variables → Actions → Variables"
-            echo "   and create UNIQUE_SUFFIX with a short unique value (e.g., x7k2)."
-            exit 1
-          fi
           echo "✅ Confirmation received"
-          echo "   Using suffix: ${{ vars.UNIQUE_SUFFIX }}"
 
   setup-aws-backend:
     name: Setup AWS S3 Backend
@@ -52,7 +44,8 @@ jobs:
 
       - name: Create S3 Bucket for Terraform State
         run: |
-          BUCKET_NAME="${{ env.PROJECT_PREFIX }}-tf-state-aws-${{ env.UNIQUE_SUFFIX }}"
+          ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+          BUCKET_NAME="${{ env.PROJECT_PREFIX }}-tf-state-${ACCOUNT_ID}"
           
           # Check if bucket exists
           if aws s3 ls "s3://${BUCKET_NAME}" 2>&1 | grep -q 'NoSuchBucket'; then
@@ -119,7 +112,7 @@ jobs:
 
       - name: Create GCS Bucket for Terraform State
         run: |
-          BUCKET_NAME="${{ env.PROJECT_PREFIX }}-tf-state-gcp-${{ env.UNIQUE_SUFFIX }}"
+          BUCKET_NAME="${{ env.PROJECT_PREFIX }}-tf-state-${{ vars.GCP_PROJECT_ID }}"
           
           # Check if bucket exists
           if ! gsutil ls -b "gs://${BUCKET_NAME}" 2>&1 | grep -q "${BUCKET_NAME}"; then
@@ -186,8 +179,9 @@ jobs:
 
       - name: Create Azure Storage for Terraform State
         run: |
-          RG_NAME="${{ env.PROJECT_PREFIX }}-tf-state-rg-${{ env.UNIQUE_SUFFIX }}"
-          STORAGE_ACCOUNT="${{ env.PROJECT_PREFIX }}tfstate${{ env.UNIQUE_SUFFIX }}"
+          SUB_SHORT=$(echo "$ARM_SUBSCRIPTION_ID" | tr -d '-' | cut -c1-8)
+          RG_NAME="${{ env.PROJECT_PREFIX }}-tf-state-rg-${SUB_SHORT}"
+          STORAGE_ACCOUNT="${{ env.PROJECT_PREFIX }}tf${SUB_SHORT}"
           CONTAINER_NAME="tfstate"
           
           # Check if resource group exists
@@ -263,9 +257,9 @@ jobs:
           echo "" >> "$GITHUB_STEP_SUMMARY"
           echo "| Provider | Status | Backend Location |" >> "$GITHUB_STEP_SUMMARY"
           echo "|----------|--------|------------------|" >> "$GITHUB_STEP_SUMMARY"
-          echo "| AWS | ${{ needs.setup-aws-backend.result }} | s3://${{ env.PROJECT_PREFIX }}-tf-state-aws-${{ env.UNIQUE_SUFFIX }} |" >> "$GITHUB_STEP_SUMMARY"
-          echo "| GCP | ${{ needs.setup-gcp-backend.result }} | gs://${{ env.PROJECT_PREFIX }}-tf-state-gcp-${{ env.UNIQUE_SUFFIX }} |" >> "$GITHUB_STEP_SUMMARY"
-          echo "| Azure | ${{ needs.setup-azure-backend.result }} | ${{ env.PROJECT_PREFIX }}tfstate${{ env.UNIQUE_SUFFIX }}/tfstate |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| AWS | ${{ needs.setup-aws-backend.result }} | s3://${{ env.PROJECT_PREFIX }}-tf-state-<account-id> |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| GCP | ${{ needs.setup-gcp-backend.result }} | gs://${{ env.PROJECT_PREFIX }}-tf-state-${{ vars.GCP_PROJECT_ID }} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Azure | ${{ needs.setup-azure-backend.result }} | ${{ env.PROJECT_PREFIX }}tf<sub-short>/tfstate |" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
           echo "### Features Enabled" >> "$GITHUB_STEP_SUMMARY"
           echo "- ✅ Versioning enabled on all backends" >> "$GITHUB_STEP_SUMMARY"
