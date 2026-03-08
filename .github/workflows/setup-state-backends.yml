@@ -186,8 +186,13 @@ jobs:
           STORAGE_ACCOUNT="${{ env.PROJECT_PREFIX }}tf${SUB_SHORT}"
           CONTAINER_NAME="tfstate"
           
-          # Check if resource group exists
-          if ! az group show --name "${RG_NAME}" &>/dev/null; then
+          # Create or ensure resource group is ready
+          RG_STATE=$(az group show --name "${RG_NAME}" --query "properties.provisioningState" -o tsv 2>/dev/null || echo "NotFound")
+          if [ "$RG_STATE" = "NotFound" ] || [ "$RG_STATE" = "Deleting" ]; then
+            if [ "$RG_STATE" = "Deleting" ]; then
+              echo "⏳ Resource group is still being deleted, waiting..."
+              az group wait --name "${RG_NAME}" --deleted --timeout 300 2>/dev/null || true
+            fi
             echo "Creating resource group: ${RG_NAME}"
             az group create \
               --name "${RG_NAME}" \
