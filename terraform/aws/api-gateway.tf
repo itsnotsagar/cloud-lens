@@ -54,6 +54,7 @@ resource "aws_api_gateway_integration" "put_s3" {
   type                    = "AWS"
   uri                     = "arn:aws:apigateway:${var.aws_region}:s3:path/${aws_s3_bucket.images.id}/{filename}"
   credentials             = aws_iam_role.api_gateway_s3.arn
+  content_handling        = "CONVERT_TO_BINARY"
 
   request_parameters = {
     "integration.request.path.filename"       = "method.request.path.filename"
@@ -103,6 +104,8 @@ resource "aws_api_gateway_integration" "options_upload" {
   resource_id = aws_api_gateway_resource.upload_filename.id
   http_method = aws_api_gateway_method.options_upload.http_method
   type        = "MOCK"
+
+  passthrough_behavior = "WHEN_NO_MATCH"
 
   request_templates = {
     "application/json" = "{\"statusCode\": 200}"
