@@ -6,14 +6,6 @@ resource "aws_s3_bucket" "images" {
   bucket = "${var.project_prefix}-images-${data.aws_caller_identity.current.account_id}"
 }
 
-resource "aws_s3_bucket_versioning" "images" {
-  bucket = aws_s3_bucket.images.id
-
-  versioning_configuration {
-    status = "Enabled"
-  }
-}
-
 resource "aws_s3_bucket_server_side_encryption_configuration" "images" {
   bucket = aws_s3_bucket.images.id
 
@@ -22,18 +14,6 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "images" {
       sse_algorithm = "AES256"
     }
     bucket_key_enabled = true
-  }
-}
-
-resource "aws_s3_bucket_cors_configuration" "images" {
-  bucket = aws_s3_bucket.images.id
-
-  cors_rule {
-    allowed_headers = ["Content-Type", "Accept", "X-Amz-Date", "Authorization", "X-Api-Key"]
-    allowed_methods = ["PUT"]
-    allowed_origins = ["http://${aws_s3_bucket_website_configuration.website.website_endpoint}"]
-    expose_headers  = ["ETag"]
-    max_age_seconds = 3000
   }
 }
 
@@ -63,10 +43,6 @@ resource "aws_s3_bucket_lifecycle_configuration" "images" {
 
     expiration {
       days = 1
-    }
-
-    noncurrent_version_expiration {
-      noncurrent_days = 1
     }
   }
 }

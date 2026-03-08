@@ -66,6 +66,7 @@ resource "google_cloudfunctions2_function" "classify" {
     environment_variables = {
       S3_BUCKET_NAME       = var.s3_bucket_name
       AWS_REGION           = var.aws_region
+      AWS_ROLE_ARN         = var.aws_role_arn
       NOTIFICATION_EMAIL   = var.notification_email
       GCP_PROJECT_ID       = var.gcp_project_id
       GCP_LOCATION         = var.gcp_region

@@ -4,7 +4,9 @@ import logging
 import os
 import re
 import time
+from datetime import datetime, timedelta, timezone
 from html import escape as html_escape
+from urllib.request import Request, urlopen
 
 import boto3
 import functions_framework
@@ -22,6 +24,7 @@ logger.setLevel(logging.INFO)
 # Environment variables (non-sensitive)
 S3_BUCKET_NAME = os.environ.get("S3_BUCKET_NAME", "")
 AWS_REGION = os.environ.get("AWS_REGION", "us-east-1")
+AWS_ROLE_ARN = os.environ.get("AWS_ROLE_ARN", "")
 NOTIFICATION_EMAIL = os.environ.get("NOTIFICATION_EMAIL", "")
 GCP_PROJECT_ID = os.environ.get("GCP_PROJECT_ID", "")
 GCP_LOCATION = os.environ.get("GCP_LOCATION", "us-central1")
@@ -33,6 +36,7 @@ secret_client = secretmanager.SecretManagerServiceClient()
 # Cache for secrets and clients (avoid repeated API calls and initialization)
 _secrets_cache = {}
 _s3_client = None
+_s3_credentials_expiry = None
 _email_client = None
 _gemini_model = None
 _processed_images = {}  # Cache to prevent duplicate processing
@@ -41,6 +45,7 @@ _processed_images = {}  # Cache to prevent duplicate processing
 REQUIRED_ENV_VARS = [
     "S3_BUCKET_NAME",
     "AWS_REGION",
+    "AWS_ROLE_ARN",
     "NOTIFICATION_EMAIL",
     "GCP_PROJECT_ID",
     "GCP_LOCATION",
@@ -171,26 +176,54 @@ def classify_image(request):
         return json.dumps({"error": "Internal server error"}), 500
 
 
+def _get_google_id_token(audience: str) -> str:
+    """Fetch a Google-signed OIDC identity token from the metadata server."""
+    url = (
+        "http://metadata.google.internal/computeMetadata/v1/"
+        f"instance/service-accounts/default/identity?audience={audience}&format=full"
+    )
+    req = Request(url, headers={"Metadata-Flavor": "Google"})
+    with urlopen(req, timeout=5) as resp:
+        return resp.read().decode("utf-8")
+
+
 def get_s3_client():
-    """Get or create cached S3 client."""
-    global _s3_client
-    if _s3_client is None:
-        aws_access_key_id = get_secret("imgclass-aws-access-key-id")
-        aws_secret_access_key = get_secret("imgclass-aws-secret-access-key")
-        
-        config = Config(
-            connect_timeout=10,
-            read_timeout=30,
-            retries={'max_attempts': 3, 'mode': 'standard'}
-        )
-        
-        _s3_client = boto3.client(
-            "s3",
-            aws_access_key_id=aws_access_key_id,
-            aws_secret_access_key=aws_secret_access_key,
-            region_name=AWS_REGION,
-            config=config
-        )
+    """Get or create cached S3 client using Workload Identity Federation."""
+    global _s3_client, _s3_credentials_expiry
+
+    # Reuse cached client if credentials haven't expired (with 60s buffer)
+    if _s3_client is not None and _s3_credentials_expiry is not None:
+        if datetime.now(timezone.utc) < _s3_credentials_expiry:
+            return _s3_client
+
+    # Get Google OIDC token and exchange for AWS temporary credentials
+    google_token = _get_google_id_token("sts.amazonaws.com")
+
+    sts_client = boto3.client("sts", region_name=AWS_REGION)
+    response = sts_client.assume_role_with_web_identity(
+        RoleArn=AWS_ROLE_ARN,
+        RoleSessionName="classify-function",
+        WebIdentityToken=google_token,
+        DurationSeconds=900,
+    )
+
+    creds = response["Credentials"]
+    _s3_credentials_expiry = creds["Expiration"].replace(tzinfo=timezone.utc) - timedelta(seconds=60)
+
+    config = Config(
+        connect_timeout=10,
+        read_timeout=30,
+        retries={"max_attempts": 3, "mode": "standard"},
+    )
+
+    _s3_client = boto3.client(
+        "s3",
+        aws_access_key_id=creds["AccessKeyId"],
+        aws_secret_access_key=creds["SecretAccessKey"],
+        aws_session_token=creds["SessionToken"],
+        region_name=AWS_REGION,
+        config=config,
+    )
     return _s3_client
 
 
