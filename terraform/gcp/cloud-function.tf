@@ -53,8 +53,8 @@ resource "google_cloudfunctions2_function" "classify" {
     max_instance_count               = 10
     min_instance_count               = 0
     available_memory                 = "512Mi" # vertexai + boto3 + secretmanager need headroom for cold starts
-    timeout_seconds                  = 60      # Reduced from 120s - typical execution is ~10-15s
-    max_instance_request_concurrency = 1       # Process one request at a time per instance
+    timeout_seconds                  = 300     # S3 download + Gemini inference + email send
+    max_instance_request_concurrency = 10      # I/O-bound work, safe to handle multiple requests per instance
 
     # Service-to-service authentication required
     ingress_settings               = "ALLOW_ALL"

@@ -154,13 +154,6 @@ resource "aws_iam_role_policy" "eventbridge_invoke_api_destination" {
           "events:InvokeApiDestination"
         ]
         Resource = aws_cloudwatch_event_api_destination.gcp_function.arn
-      },
-      {
-        Effect = "Allow"
-        Action = [
-          "sqs:SendMessage"
-        ]
-        Resource = aws_sqs_queue.eventbridge_dlq.arn
       }
     ]
   })

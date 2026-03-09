@@ -61,6 +61,10 @@ def validate_environment():
     missing = [var for var in REQUIRED_ENV_VARS if not os.environ.get(var)]
     if missing:
         raise RuntimeError(f"Missing required environment variables: {', '.join(missing)}")
+    # Validate email format
+    email_pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
+    if NOTIFICATION_EMAIL and not re.match(email_pattern, NOTIFICATION_EMAIL):
+        raise RuntimeError(f"Invalid NOTIFICATION_EMAIL format: {NOTIFICATION_EMAIL}")
 
 # Validate at module load time
 validate_environment()
