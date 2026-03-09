@@ -77,21 +77,21 @@ jobs:
             
             echo "🗑️  Force delete enabled - emptying bucket..."
             
-            # Delete all object versions and delete markers
+            # Delete all object versions
             aws s3api list-object-versions \
               --bucket "${BUCKET_NAME}" \
               --output json \
               --query '{Objects: Versions[].{Key:Key,VersionId:VersionId}}' | \
-            jq -r '.Objects[]? | "--key \"\(.Key)\" --version-id \"\(.VersionId)\""' | \
-            xargs -I {} aws s3api delete-object --bucket "${BUCKET_NAME}" {}
-            
-            # Delete delete markers
+            jq -r '.Objects[]? | [.Key, .VersionId] | @tsv' | \
+            xargs -n2 bash -c 'aws s3api delete-object --bucket "$0" --key "$1" --version-id "$2"' "${BUCKET_NAME}"
+
+            # Delete all delete markers
             aws s3api list-object-versions \
               --bucket "${BUCKET_NAME}" \
               --output json \
               --query '{Objects: DeleteMarkers[].{Key:Key,VersionId:VersionId}}' | \
-            jq -r '.Objects[]? | "--key \"\(.Key)\" --version-id \"\(.VersionId)\""' | \
-            xargs -I {} aws s3api delete-object --bucket "${BUCKET_NAME}" {}
+            jq -r '.Objects[]? | [.Key, .VersionId] | @tsv' | \
+            xargs -n2 bash -c 'aws s3api delete-object --bucket "$0" --key "$1" --version-id "$2"' "${BUCKET_NAME}"
           fi
           
           # Delete the bucket
