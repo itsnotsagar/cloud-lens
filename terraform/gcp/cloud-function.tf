@@ -74,6 +74,7 @@ resource "google_cloudfunctions2_function" "classify" {
       AUTH_TOKEN_SECRET_ID       = google_secret_manager_secret.eventbridge_auth_token.secret_id
       AZURE_EMAIL_CONN_SECRET_ID = google_secret_manager_secret.azure_email_connection_string.secret_id
       AZURE_SENDER_SECRET_ID     = google_secret_manager_secret.azure_sender_address.secret_id
+      GEMINI_MODEL               = var.gemini_model
     }
   }
 }

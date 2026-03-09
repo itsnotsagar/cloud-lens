@@ -10,12 +10,11 @@ from urllib.request import Request, urlopen
 
 import boto3
 import functions_framework
-from google.cloud import aiplatform
 from azure.communication.email import EmailClient
 from botocore.config import Config
-from botocore.exceptions import ClientError
 from google.cloud import secretmanager
-from vertexai.generative_models import GenerativeModel, Part
+from google import genai
+from google.genai import types
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -31,6 +30,7 @@ GCP_LOCATION = os.environ.get("GCP_LOCATION", "us-central1")
 AUTH_TOKEN_SECRET_ID = os.environ.get("AUTH_TOKEN_SECRET_ID", "")
 AZURE_EMAIL_CONN_SECRET_ID = os.environ.get("AZURE_EMAIL_CONN_SECRET_ID", "")
 AZURE_SENDER_SECRET_ID = os.environ.get("AZURE_SENDER_SECRET_ID", "")
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
 
 # Secret Manager client (initialized once)
 secret_client = secretmanager.SecretManagerServiceClient()
@@ -71,27 +71,23 @@ validate_environment()
 
 # Allowed image extensions and their magic bytes
 ALLOWED_EXTENSIONS = {"jpg", "jpeg", "png", "webp"}
-IMAGE_MAGIC_BYTES = {
-    b"\xff\xd8\xff": "jpeg",
-    b"\x89PNG": "png",
-    b"RIFF": "webp",  # WebP starts with RIFF....WEBP
-}
+IMAGE_MAGIC_BYTES = (b"\xff\xd8\xff", b"\x89PNG", b"RIFF")  # JPEG, PNG, WebP
 MAX_IMAGE_SIZE = 10 * 1024 * 1024  # 10 MB
 MAX_CLASSIFICATION_LENGTH = 2000
 CACHE_MAX_AGE_SECONDS = 300  # 5 minutes
+MIME_MAP = {"jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png", "webp": "image/webp"}
+
+
+def _get_extension(filename: str) -> str:
+    """Extract lowercase file extension from a filename."""
+    return filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+
 
 def _is_valid_s3_key(key: str) -> bool:
     """Validate S3 key to prevent path traversal and restrict to image files."""
-    if not key or ".." in key or key.startswith("/"):
-        return False
-    # Must end with an allowed image extension
-    ext = key.rsplit(".", 1)[-1].lower() if "." in key else ""
-    if ext not in ALLOWED_EXTENSIONS:
-        return False
-    # Only allow safe characters in the key
-    if not re.match(r'^[\w./ -]+$', key):
-        return False
-    return True
+    return (bool(key) and ".." not in key and not key.startswith("/")
+            and _get_extension(key) in ALLOWED_EXTENSIONS
+            and bool(re.match(r'^[\w./ -]+$', key)))
 
 
 def get_secret(secret_id: str) -> str:
@@ -133,25 +129,19 @@ def classify_image(request):
         if not request_json:
             return json.dumps({"error": "No JSON payload received"}), 400
 
-        # Always use the configured bucket — never allow caller to override
-        bucket = S3_BUCKET_NAME
         key = request_json.get("key", "")
 
-        if not key:
-            return json.dumps({"error": "Missing 'key' in request"}), 400
-
-        # Validate S3 key to prevent path traversal or access to unintended objects
-        if not _is_valid_s3_key(key):
+        # Validate S3 key (also catches empty key, path traversal, non-image extensions)
+        if not key or not _is_valid_s3_key(key):
             return json.dumps({"error": "Invalid image key"}), 400
 
         # Deduplication: Check if we've processed this image recently (within 60 seconds)
-        image_id = f"{bucket}/{key}"
         current_time = time.time()
         
-        if image_id in _processed_images:
-            last_processed = _processed_images[image_id]
+        if key in _processed_images:
+            last_processed = _processed_images[key]
             if current_time - last_processed < 60:
-                logger.info("Skipping duplicate request for %s (processed %.1fs ago)", image_id, current_time - last_processed)
+                logger.info("Skipping duplicate request for %s (processed %.1fs ago)", key, current_time - last_processed)
                 return json.dumps({
                     "status": "skipped",
                     "reason": "duplicate_request",
@@ -159,17 +149,17 @@ def classify_image(request):
                 }), 200
         
         # Mark as processing
-        _processed_images[image_id] = current_time
+        _processed_images[key] = current_time
         
         # Clean up entries older than CACHE_MAX_AGE_SECONDS
         expired = [k for k, v in _processed_images.items() if current_time - v > CACHE_MAX_AGE_SECONDS]
         for k in expired:
             del _processed_images[k]
 
-        logger.info("Processing image: s3://%s/%s", bucket, key)
+        logger.info("Processing image: s3://%s/%s", S3_BUCKET_NAME, key)
 
         # Step 1: Download the image from S3
-        image_bytes = download_from_s3(bucket, key)
+        image_bytes = download_from_s3(key)
 
         # Step 2: Classify using Vertex AI Gemini
         classification_result = classify_with_gemini(image_bytes, key)
@@ -207,9 +197,8 @@ def get_s3_client():
     global _s3_client, _s3_credentials_expiry
 
     # Reuse cached client if credentials haven't expired (with 60s buffer)
-    if _s3_client is not None and _s3_credentials_expiry is not None:
-        if datetime.now(timezone.utc) < _s3_credentials_expiry:
-            return _s3_client
+    if _s3_client is not None and datetime.now(timezone.utc) < _s3_credentials_expiry:
+        return _s3_client
 
     # Get Google OIDC token and exchange for AWS temporary credentials
     google_token = _get_google_id_token("sts.amazonaws.com")
@@ -242,67 +231,28 @@ def get_s3_client():
     return _s3_client
 
 
-def _validate_image_magic_bytes(image_bytes: bytes) -> bool:
-    """Validate that the file content matches a known image format via magic bytes."""
-    for magic, _ in IMAGE_MAGIC_BYTES.items():
-        if image_bytes[:len(magic)] == magic:
-            return True
-    return False
-
-
-def download_from_s3(bucket: str, key: str) -> bytes:
+def download_from_s3(key: str) -> bytes:
     """Download an object from S3 and return its bytes."""
     s3_client = get_s3_client()
-    
-    # Retry logic for eventual consistency (S3 might not be immediately available)
-    max_retries = 2
-    retry_delay = 0.5  # seconds
-    
-    for attempt in range(max_retries):
-        try:
-            # Check size before downloading to prevent memory exhaustion
-            head = s3_client.head_object(Bucket=bucket, Key=key)
-            content_length = head.get("ContentLength", 0)
-            if content_length > MAX_IMAGE_SIZE:
-                raise ValueError(f"Image too large: {content_length} bytes (max {MAX_IMAGE_SIZE} bytes)")
-
-            response = s3_client.get_object(Bucket=bucket, Key=key)
-            image_bytes = response["Body"].read()
-
-            # Validate magic bytes to ensure it's actually an image
-            if not _validate_image_magic_bytes(image_bytes):
-                raise ValueError("File content does not match a supported image format")
-            
-            logger.info("Downloaded %d bytes from S3", len(image_bytes))
-            return image_bytes
-            
-        except s3_client.exceptions.NoSuchKey:
-            if attempt < max_retries - 1:
-                logger.info("Image not yet available, retrying in %ss (attempt %d/%d)", retry_delay, attempt + 1, max_retries)
-                time.sleep(retry_delay)
-                retry_delay *= 2  # Exponential backoff
-            else:
-                logger.error("Image not found after %d attempts", max_retries)
-                raise
-        except ClientError as e:
-            logger.error("S3 client error downloading image: %s", e.response['Error']['Code'])
-            raise
-        except Exception as e:
-            logger.error("Error downloading image: %s", e)
-            raise
+    head = s3_client.head_object(Bucket=S3_BUCKET_NAME, Key=key)
+    if head.get("ContentLength", 0) > MAX_IMAGE_SIZE:
+        raise ValueError(f"Image too large: {head['ContentLength']} bytes (max {MAX_IMAGE_SIZE} bytes)")
+    response = s3_client.get_object(Bucket=S3_BUCKET_NAME, Key=key)
+    image_bytes = response["Body"].read()
+    if not any(image_bytes.startswith(magic) for magic in IMAGE_MAGIC_BYTES):
+        raise ValueError("File content does not match a supported image format")
+    logger.info("Downloaded %d bytes from S3", len(image_bytes))
+    return image_bytes
 
 
-def get_gemini_model():
-    """Get or create cached Gemini model."""
+def _get_genai_client():
+    """Get or create cached Gemini client."""
     global _gemini_model
     if _gemini_model is None:
-        aiplatform.init(project=GCP_PROJECT_ID, location=GCP_LOCATION)
-        _gemini_model = GenerativeModel(
-            "gemini-2.5-flash",
-            generation_config={
-                "temperature": 0.4,
-                "max_output_tokens": 512,
-            }
+        _gemini_model = genai.Client(
+            vertexai=True,
+            project=GCP_PROJECT_ID,
+            location=GCP_LOCATION,
         )
     return _gemini_model
 
@@ -313,11 +263,9 @@ def classify_with_gemini(image_bytes: bytes, filename: str) -> str:
     Returns the classification result as a string.
     """
     # Determine MIME type from filename
-    ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else "jpeg"
-    mime_map = {"jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png", "webp": "image/webp"}
-    mime_type = mime_map.get(ext, "image/jpeg")
+    mime_type = MIME_MAP.get(_get_extension(filename), "image/jpeg")
 
-    image_part = Part.from_data(data=image_bytes, mime_type=mime_type)
+    image_part = types.Part.from_bytes(data=image_bytes, mime_type=mime_type)
 
     prompt = """Classify this image with:
 **Category:** [main category]
@@ -326,9 +274,14 @@ def classify_with_gemini(image_bytes: bytes, filename: str) -> str:
 **Description:** [2-3 sentences]
 **Tags:** [comma-separated tags]"""
 
-    model = get_gemini_model()
-    response = model.generate_content(
-        [image_part, prompt],
+    client = _get_genai_client()
+    response = client.models.generate_content(
+        model=GEMINI_MODEL,
+        contents=[image_part, prompt],
+        config=types.GenerateContentConfig(
+            temperature=0.4,
+            max_output_tokens=512,
+        ),
     )
     result = response.text
     if len(result) > MAX_CLASSIFICATION_LENGTH:
@@ -383,16 +336,11 @@ def _extract_display_name(image_name: str) -> tuple:
         except ValueError:
             upload_time = raw_ts.replace("_", " ").replace("-", ":")
         return name, upload_time
-    # Legacy format: epoch_ms-filename.ext
-    match = re.match(r'^\d{10,13}-(.*)', image_name)
-    if match:
-        return match.group(1), None
     return image_name, None
 
 
-def _build_email_html(safe_image_name: str, safe_classification: str) -> str:
+def _build_email_html(safe_classification: str, display_name: str, upload_time: str | None) -> str:
     """Build a styled HTML email from the classification result."""
-    display_name, upload_time = _extract_display_name(safe_image_name)
     fields = _parse_classification(safe_classification)
 
     confidence = fields.get("confidence", "")
@@ -468,20 +416,19 @@ def send_email(image_name: str, classification: str) -> bool:
     """
     Send classification results via Azure Communication Services Email.
     """
-    if not NOTIFICATION_EMAIL:
-        logger.info("Email not configured — skipping email send")
-        return False
-
     try:
         azure_sender_address = get_secret(AZURE_SENDER_SECRET_ID)
         email_client = get_email_client()
 
         # Escape user-controlled content to prevent HTML injection
-        safe_image_name = html_escape(image_name)
         safe_classification = html_escape(classification)
 
+        # Extract display name once for subject + email body
+        display_name, upload_time = _extract_display_name(image_name)
+        safe_display_name = html_escape(display_name)
+
         # Parse classification fields for structured rendering
-        html_body = _build_email_html(safe_image_name, safe_classification)
+        html_body = _build_email_html(safe_classification, safe_display_name, upload_time)
 
         message = {
             "senderAddress": azure_sender_address,
@@ -489,7 +436,7 @@ def send_email(image_name: str, classification: str) -> bool:
                 "to": [{"address": NOTIFICATION_EMAIL}]
             },
             "content": {
-                "subject": f"Image Classification: {html_escape(_extract_display_name(image_name)[0])}",
+                "subject": f"Image Classification: {safe_display_name}",
                 "html": html_body,
                 "plainText": f"Image: {image_name}\n\nClassification:\n{classification}\n\n---\nMulti-Cloud Image Classification Pipeline",
             },

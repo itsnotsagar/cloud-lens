@@ -21,6 +21,12 @@ variable "gcp_region" {
   default     = "us-central1"
 }
 
+variable "gemini_model" {
+  description = "Gemini model name for image classification"
+  type        = string
+  default     = "gemini-2.5-flash"
+}
+
 variable "s3_bucket_name" {
   description = "Name of the S3 bucket where images are uploaded (from AWS module)"
   type        = string
