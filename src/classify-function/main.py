@@ -41,7 +41,6 @@ _s3_client = None
 _s3_credentials_expiry = None
 _email_client = None
 _gemini_model = None
-_processed_images = {}  # Cache to prevent duplicate processing
 
 # Validate required environment variables at startup
 REQUIRED_ENV_VARS = [
@@ -74,7 +73,6 @@ ALLOWED_EXTENSIONS = {"jpg", "jpeg", "png", "webp"}
 IMAGE_MAGIC_BYTES = (b"\xff\xd8\xff", b"\x89PNG", b"RIFF")  # JPEG, PNG, WebP
 MAX_IMAGE_SIZE = 10 * 1024 * 1024  # 10 MB
 MAX_CLASSIFICATION_LENGTH = 2000
-CACHE_MAX_AGE_SECONDS = 300  # 5 minutes
 MIME_MAP = {"jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png", "webp": "image/webp"}
 
 
@@ -134,27 +132,6 @@ def classify_image(request):
         # Validate S3 key (also catches empty key, path traversal, non-image extensions)
         if not key or not _is_valid_s3_key(key):
             return json.dumps({"error": "Invalid image key"}), 400
-
-        # Deduplication: Check if we've processed this image recently (within 60 seconds)
-        current_time = time.time()
-        
-        if key in _processed_images:
-            last_processed = _processed_images[key]
-            if current_time - last_processed < 60:
-                logger.info("Skipping duplicate request for %s (processed %.1fs ago)", key, current_time - last_processed)
-                return json.dumps({
-                    "status": "skipped",
-                    "reason": "duplicate_request",
-                    "image": key,
-                }), 200
-        
-        # Mark as processing
-        _processed_images[key] = current_time
-        
-        # Clean up entries older than CACHE_MAX_AGE_SECONDS
-        expired = [k for k, v in _processed_images.items() if current_time - v > CACHE_MAX_AGE_SECONDS]
-        for k in expired:
-            del _processed_images[k]
 
         logger.info("Processing image: s3://%s/%s", S3_BUCKET_NAME, key)
 
