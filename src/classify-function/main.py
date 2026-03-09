@@ -356,7 +356,7 @@ def _parse_classification(text: str) -> dict:
         if not line:
             continue
         # Match lines like "**Category:** Animals" or "Category: Animals"
-        match = re.match(r'\*{0,2}(Category|Subcategory|Confidence|Description|Tags)\*{0,2}\s*:\s*(.*)', line, re.IGNORECASE)
+        match = re.match(r'\*{0,2}(Category|Subcategory|Confidence|Description|Tags)\s*:\s*\*{0,2}\s*(.*)', line, re.IGNORECASE)
         if match:
             if current_key:
                 fields[current_key] = " ".join(current_value).strip()

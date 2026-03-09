@@ -79,8 +79,8 @@ resource "aws_cloudwatch_event_target" "gcp_function" {
   }
 
   retry_policy {
-    maximum_retry_attempts       = 2
-    maximum_event_age_in_seconds = 180
+    maximum_retry_attempts       = 0
+    maximum_event_age_in_seconds = 60
   }
 }
 
