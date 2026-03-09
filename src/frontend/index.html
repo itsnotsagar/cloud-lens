@@ -44,7 +44,7 @@
     <div class="status" id="status"></div>
 
     <div class="flow-diagram">
-      Browser <span class="arrow">→</span> API Gateway <span class="arrow">→</span> S3 (AWS)
+      Browser <span class="arrow">→</span> CloudFront <span class="arrow">→</span> API Gateway <span class="arrow">→</span> S3 (AWS)
       <span class="arrow">→</span> EventBridge
       <span class="arrow">→</span> Cloud Function (GCP)
       <span class="arrow">→</span> Vertex AI Gemini
@@ -164,15 +164,14 @@
         };
 
         xhr.onerror = () => {
-          showStatus('Upload failed: network error. Open DevTools (F12) → Console for details.', 'error');
+          showStatus('Upload failed — please check your connection and try again.', 'error');
           resetButton();
         };
 
         xhr.send(buffer);
 
       } catch (err) {
-        console.error('[upload] exception:', err);
-        showStatus(`Upload failed: $${err.message}`, 'error');
+        showStatus('Upload failed — something went wrong. Please try again.', 'error');
         resetButton();
       }
     });

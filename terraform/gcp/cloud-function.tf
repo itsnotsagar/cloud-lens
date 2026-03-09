@@ -53,6 +53,7 @@ resource "google_cloudfunctions2_function" "classify" {
     max_instance_count               = 10
     min_instance_count               = 0
     available_memory                 = "512Mi" # vertexai + boto3 + secretmanager need headroom for cold starts
+    available_cpu                    = "1"     # Required for concurrency > 1
     timeout_seconds                  = 300     # S3 download + Gemini inference + email send
     max_instance_request_concurrency = 10      # I/O-bound work, safe to handle multiple requests per instance
 

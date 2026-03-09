@@ -345,6 +345,104 @@ def get_email_client():
     return _email_client
 
 
+def _parse_classification(text: str) -> dict:
+    """Parse the Gemini classification response into structured fields."""
+    fields = {}
+    current_key = None
+    current_value = []
+
+    for line in text.split("\n"):
+        line = line.strip()
+        if not line:
+            continue
+        # Match lines like "**Category:** Animals" or "Category: Animals"
+        match = re.match(r'\*{0,2}(Category|Subcategory|Confidence|Description|Tags)\*{0,2}\s*:\s*(.*)', line, re.IGNORECASE)
+        if match:
+            if current_key:
+                fields[current_key] = " ".join(current_value).strip()
+            current_key = match.group(1).lower()
+            current_value = [match.group(2).strip()]
+        elif current_key:
+            current_value.append(line)
+
+    if current_key:
+        fields[current_key] = " ".join(current_value).strip()
+
+    return fields
+
+
+def _build_email_html(safe_image_name: str, safe_classification: str) -> str:
+    """Build a styled HTML email from the classification result."""
+    fields = _parse_classification(safe_classification)
+
+    confidence = fields.get("confidence", "")
+    confidence_colors = {
+        "high": ("#059669", "#d1fae5"),
+        "medium": ("#d97706", "#fef3c7"),
+        "low": ("#dc2626", "#fee2e2"),
+    }
+    conf_fg, conf_bg = confidence_colors.get(confidence.lower(), ("#6b7280", "#f3f4f6"))
+
+    tags_html = ""
+    if "tags" in fields:
+        tags = [t.strip() for t in fields["tags"].split(",") if t.strip()]
+        tags_html = " ".join(
+            f'<span style="display:inline-block;background:#e0e7ff;color:#3730a3;'
+            f'padding:4px 10px;border-radius:12px;font-size:12px;margin:3px 2px">{t}</span>'
+            for t in tags
+        )
+
+    # Build rows for category, subcategory, description
+    detail_rows = ""
+    for key, label, icon in [
+        ("category", "Category", "\U0001f4c2"),
+        ("subcategory", "Subcategory", "\U0001f50d"),
+        ("description", "Description", "\U0001f4dd"),
+    ]:
+        if key in fields:
+            detail_rows += (
+                f'<tr><td style="padding:10px 12px;color:#6b7280;font-size:13px;'
+                f'vertical-align:top;white-space:nowrap">{icon} {label}</td>'
+                f'<td style="padding:10px 12px;color:#1f2937;font-size:14px">{fields[key]}</td></tr>'
+            )
+
+    confidence_badge = ""
+    if confidence:
+        confidence_badge = (
+            f'<tr><td style="padding:10px 12px;color:#6b7280;font-size:13px;vertical-align:top">'
+            f'\u2705 Confidence</td><td style="padding:10px 12px">'
+            f'<span style="display:inline-block;background:{conf_bg};color:{conf_fg};'
+            f'padding:3px 12px;border-radius:10px;font-size:13px;font-weight:600">'
+            f'{confidence}</span></td></tr>'
+        )
+
+    return f"""<html>
+<body style="margin:0;padding:0;background:#f3f4f6;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif">
+<div style="max-width:560px;margin:30px auto;background:#ffffff;border-radius:12px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,0.1)">
+  <div style="background:linear-gradient(135deg,#4f46e5,#7c3aed);padding:28px 24px;text-align:center">
+    <h1 style="margin:0;color:#ffffff;font-size:20px;font-weight:600">Image Classification Result</h1>
+  </div>
+  <div style="padding:24px">
+    <div style="background:#f9fafb;border:1px solid #e5e7eb;border-radius:8px;padding:14px 16px;margin-bottom:20px;display:flex;align-items:center">
+      <span style="font-size:18px;margin-right:10px">\U0001f5bc\ufe0f</span>
+      <div>
+        <div style="font-size:11px;color:#9ca3af;text-transform:uppercase;letter-spacing:0.5px">Image</div>
+        <div style="font-size:14px;color:#1f2937;font-weight:500;word-break:break-all">{safe_image_name}</div>
+      </div>
+    </div>
+    <table style="width:100%;border-collapse:collapse;background:#f9fafb;border:1px solid #e5e7eb;border-radius:8px;overflow:hidden">
+      {detail_rows}
+      {confidence_badge}
+    </table>
+    {"<div style='margin-top:16px'><div style=font-size:13px;color:#6b7280;margin-bottom:6px>🏷️ Tags</div>" + tags_html + "</div>" if tags_html else ""}
+  </div>
+  <div style="border-top:1px solid #e5e7eb;padding:16px 24px;text-align:center">
+    <span style="font-size:11px;color:#9ca3af">AWS S3 &rarr; GCP Vertex AI &rarr; Azure Email</span>
+  </div>
+</div>
+</body></html>"""
+
+
 def send_email(image_name: str, classification: str) -> bool:
     """
     Send classification results via Azure Communication Services Email.
@@ -361,6 +459,9 @@ def send_email(image_name: str, classification: str) -> bool:
         safe_image_name = html_escape(image_name)
         safe_classification = html_escape(classification)
 
+        # Parse classification fields for structured rendering
+        html_body = _build_email_html(safe_image_name, safe_classification)
+
         message = {
             "senderAddress": azure_sender_address,
             "recipients": {
@@ -368,16 +469,7 @@ def send_email(image_name: str, classification: str) -> bool:
             },
             "content": {
                 "subject": f"Image Classification: {safe_image_name}",
-                "html": f"""<html><body style="font-family:sans-serif;max-width:600px;margin:0 auto;padding:20px">
-<h2>Image Classification Result</h2>
-<div style="background:#f5f5f5;padding:15px;border-radius:8px;margin:15px 0">
-<strong>Image:</strong> {safe_image_name}
-</div>
-<div style="background:#f5f5f5;padding:15px;border-radius:8px;margin:15px 0">
-<strong>Classification:</strong><br><pre style="white-space:pre-wrap;margin:10px 0">{safe_classification}</pre>
-</div>
-<p style="color:#666;font-size:12px;margin-top:20px">Multi-Cloud Pipeline: AWS S3 &rarr; GCP Vertex AI &rarr; Azure Email</p>
-</body></html>""",
+                "html": html_body,
                 "plainText": f"Image: {image_name}\n\nClassification:\n{classification}\n\n---\nMulti-Cloud Image Classification Pipeline",
             },
         }
