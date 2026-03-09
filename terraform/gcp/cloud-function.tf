@@ -53,8 +53,9 @@ resource "google_cloudfunctions2_function" "classify" {
     max_instance_count               = 10
     min_instance_count               = 0
     available_memory                 = "512Mi" # vertexai + boto3 + secretmanager need headroom for cold starts
-    timeout_seconds                  = 60      # Reduced from 120s - typical execution is ~10-15s
-    max_instance_request_concurrency = 1       # Process one request at a time per instance
+    available_cpu                    = "1"     # Required for concurrency > 1
+    timeout_seconds                  = 300     # S3 download + Gemini inference + email send
+    max_instance_request_concurrency = 10      # I/O-bound work, safe to handle multiple requests per instance
 
     # Service-to-service authentication required
     ingress_settings               = "ALLOW_ALL"
@@ -73,6 +74,7 @@ resource "google_cloudfunctions2_function" "classify" {
       AUTH_TOKEN_SECRET_ID       = google_secret_manager_secret.eventbridge_auth_token.secret_id
       AZURE_EMAIL_CONN_SECRET_ID = google_secret_manager_secret.azure_email_connection_string.secret_id
       AZURE_SENDER_SECRET_ID     = google_secret_manager_secret.azure_sender_address.secret_id
+      GEMINI_MODEL               = var.gemini_model
     }
   }
 }

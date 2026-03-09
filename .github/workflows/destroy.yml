@@ -185,4 +185,4 @@ jobs:
           echo "| Email Service | Azure | ${{ needs.destroy-azure.result }} |" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
           echo "> **Note:** State backends (S3, GCS, Azure Storage) were NOT destroyed." >> "$GITHUB_STEP_SUMMARY"
-          echo "> Delete them manually if no longer needed." >> "$GITHUB_STEP_SUMMARY"
+          echo "> Delete them using backend cleanup workflow (if no longer needed)" >> "$GITHUB_STEP_SUMMARY"

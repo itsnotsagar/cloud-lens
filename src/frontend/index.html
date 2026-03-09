@@ -3,12 +3,12 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Image Classification — Multi-Cloud</title>
+  <title>CloudLens - Image Classification</title>
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
   <div class="container">
-    <h1>Image Classification</h1>
+    <h1>CloudLens - Image Classification</h1>
     <p class="subtitle">Upload an image to classify it using AI across multiple clouds</p>
 
     <div class="cloud-badges">
@@ -22,7 +22,7 @@
         <path stroke-linecap="round" stroke-linejoin="round" d="M12 16.5V9.75m0 0l3 3m-3-3l-3 3M6.75 19.5a4.5 4.5 0 01-1.41-8.775 5.25 5.25 0 0110.233-2.33 3 3 0 013.758 3.848A3.752 3.752 0 0118 19.5H6.75z" />
       </svg>
       <p>Drop your image here or <strong>click to browse</strong></p>
-      <p class="hint">PNG, JPG, WEBP — max 10 MB</p>
+      <p class="hint">JPEG/JPG, PNG, WEBP — max 10 MB</p>
     </div>
 
     <input type="file" id="fileInput" accept="image/png,image/jpeg,image/webp" />
@@ -44,7 +44,7 @@
     <div class="status" id="status"></div>
 
     <div class="flow-diagram">
-      Browser <span class="arrow">→</span> API Gateway <span class="arrow">→</span> S3 (AWS)
+      Browser <span class="arrow">→</span> CloudFront <span class="arrow">→</span> API Gateway <span class="arrow">→</span> S3 (AWS)
       <span class="arrow">→</span> EventBridge
       <span class="arrow">→</span> Cloud Function (GCP)
       <span class="arrow">→</span> Vertex AI Gemini
@@ -100,7 +100,7 @@
         return;
       }
       if (!['image/png', 'image/jpeg', 'image/webp'].includes(file.type)) {
-        showStatus('Unsupported file type. Use PNG, JPG, or WEBP.', 'error');
+        showStatus('Unsupported file type. Use PNG, JPEG/JPG, or WEBP.', 'error');
         return;
       }
 
@@ -128,16 +128,13 @@
       showStatus('Uploading image to AWS S3 via API Gateway…', 'info');
 
       try {
-        const timestamp = Date.now();
+        const now = new Date();
+        const pad = (n) => String(n).padStart(2, '0');
+        const timestamp = `$${pad(now.getDate())}-$${pad(now.getMonth()+1)}-$${now.getFullYear()}_$${pad(now.getHours())}-$${pad(now.getMinutes())}-$${pad(now.getSeconds())}`;
         const safeName = selectedFile.name.replace(/[^a-zA-Z0-9._-]/g, '_');
-        const uploadName = `$${timestamp}-$${safeName}`;
+        const uploadName = `$${timestamp}_$${safeName}`;
         const url = `$${API_URL}/upload/$${uploadName}`;
         const contentType = selectedFile.type;
-
-        console.log('[upload] PUT', url);
-        console.log('[upload] Origin:', location.origin);
-        console.log('[upload] Content-Type:', contentType);
-        console.log('[upload] File size:', selectedFile.size);
 
         // Read file as ArrayBuffer for reliable binary transfer
         const buffer = await selectedFile.arrayBuffer();
@@ -155,7 +152,6 @@
         });
 
         xhr.onload = () => {
-          console.log('[upload] onload — status:', xhr.status, 'headers:', xhr.getAllResponseHeaders());
           if (xhr.status >= 200 && xhr.status < 300) {
             progressFill.style.width = '100%';
             showStatus(
@@ -170,18 +166,14 @@
         };
 
         xhr.onerror = () => {
-          console.error('[upload] onerror — readyState:', xhr.readyState, 'status:', xhr.status);
-          console.error('[upload] Target URL:', url);
-          console.error('[upload] Page origin:', location.origin);
-          showStatus('Upload failed: network error. Open DevTools (F12) → Console for details.', 'error');
+          showStatus('Upload failed — please check your connection and try again.', 'error');
           resetButton();
         };
 
         xhr.send(buffer);
 
       } catch (err) {
-        console.error('[upload] exception:', err);
-        showStatus(`Upload failed: $${err.message}`, 'error');
+        showStatus('Upload failed — something went wrong. Please try again.', 'error');
         resetButton();
       }
     });

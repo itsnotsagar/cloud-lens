@@ -5,40 +5,44 @@ An end-to-end image classification pipeline deployed across **AWS**, **GCP**, an
 ## Architecture
 
 ```
-Browser → S3 Static Site (AWS)
+Browser → CloudFront (HTTPS) → S3 Static Site (AWS)
   ↓ PUT image via API Gateway
 S3 Bucket (AWS) [1-day retention]
   ↓ S3 event notification
 EventBridge Rule (AWS) → API Destination [authenticated]
   ↓ HTTP POST with auth token
-Cloud Function (GCP) [private, auth required]
-  ↓ Reads secrets from GCP Secret Manager
-  ↓ Downloads image from S3 (restricted credentials)
-  ↓ Classifies via Vertex AI Gemini
+Cloud Function (GCP) [auth token validated in code]
+  ↓ Gets Google OIDC token → AWS STS AssumeRoleWithWebIdentity
+  ↓ Downloads image from S3 (temporary credentials via WIF)
+  ↓ Classifies via Vertex AI Gemini 2.5 Flash
   ↓ Sends email via
 Azure Communication Services → Recipient Inbox
 ```
+
+**Supported image formats:** PNG, JPG, WEBP (max 10 MB)
 
 ### Cloud Responsibilities
 
 | Cloud | Role | Services |
 |-------|------|----------|
-| **AWS** | Storage, website, event routing | S3, API Gateway, EventBridge |
+| **AWS** | Storage, CDN, event routing | S3, API Gateway, EventBridge, CloudFront |
 | **GCP** | AI classification, secrets management | Cloud Functions (2nd gen), Vertex AI Gemini, Secret Manager |
 | **Azure** | Email delivery | Communication Services |
 
 ### Security Features
 
-- **Private GCP Function**: Requires authentication token (no public access)
-- **Restricted AWS Credentials**: IAM user with S3 read-only access
+- **HTTPS via CloudFront**: Website served over HTTPS with security response headers (HSTS, X-Frame-Options DENY, X-Content-Type-Options)
+- **Workload Identity Federation**: GCP Cloud Function obtains temporary AWS credentials via OIDC → STS (no stored AWS keys)
 - **Centralized Secrets**: All credentials stored in GCP Secret Manager
 - **Auto-delete Images**: S3 lifecycle policy removes images after 1 day
 - **Authenticated Event Routing**: EventBridge uses API key authentication
+- **Input Validation**: File type, size, magic bytes, and S3 key validation
+- **HTML Escape**: All user content escaped before email rendering
 
 ## Prerequisites
 
 1. **AWS** — IAM user with programmatic access (access key + secret)
-2. **GCP** — Service account with roles: Cloud Functions Admin, Vertex AI User, Storage Admin
+2. **GCP** — Service account with roles: Cloud Functions Admin, Vertex AI User, Storage Admin, IAM Service Account Admin
 3. **Azure** — Service Principal (SPN) with Contributor role on a subscription
 
 ## Setup
@@ -63,6 +67,7 @@ Go to **Settings → Secrets and variables → Actions → Variables** and add:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
+| `PROJECT_PREFIX` | `imgclass` | Prefix for all resource names |
 | `NOTIFICATION_EMAIL` | — | Email to receive classification results |
 | `GCP_PROJECT_ID` | — | Your GCP project ID |
 | `AWS_REGION` | `us-east-1` | AWS deployment region |
@@ -90,39 +95,38 @@ The workflow deploys in this order:
 ```
 .
 ├── .github/workflows/
-│   ├── deploy.yml             # Main deployment pipeline
-│   └── destroy.yml            # Infrastructure teardown
+│   ├── deploy.yml                  # Main deployment pipeline
+│   ├── destroy.yml                 # Infrastructure teardown
+│   ├── setup-state-backends.yml    # Bootstrap Terraform state backends
+│   └── cleanup-state-backends.yml  # Remove state backends
 ├── terraform/
-│   ├── aws/                   # All AWS resources (S3, API Gateway, EventBridge)
-│   ├── gcp/                   # All GCP resources (Cloud Function, Secrets, Vertex AI)
-│   ├── azure/                 # Azure Communication Services for email
-│   └── README.md              # Detailed deployment instructions
+│   ├── aws/                        # S3, API Gateway, EventBridge, CloudFront, IAM
+│   ├── gcp/                        # Cloud Function, Secret Manager, Vertex AI, IAM
+│   ├── azure/                      # Communication Services for email
+│   └── README.md
 ├── src/
 │   ├── frontend/
-│   │   ├── index.html         # Upload page (deployed to S3)
-│   │   └── styles.css         # Stylesheet
-│   └── classify-function/     # Python Cloud Function
-│       ├── main.py            # Classification + email logic
+│   │   ├── index.html              # Upload UI (deployed to S3 via CloudFront)
+│   │   └── styles.css
+│   └── classify-function/
+│       ├── main.py                 # Classification + email logic
 │       └── requirements.txt
-├── WORKFLOW_UPDATES.md        # GitHub Actions configuration guide
-├── TERRAFORM_REORGANIZATION.md # Infrastructure restructuring details
 └── README.md
 ```
 
 ## How It Works
 
-1. User opens the static website hosted on **S3** (AWS)
-2. Selects an image and clicks **Upload & Classify**
+1. User opens the website served via **CloudFront** (HTTPS) → **S3** (AWS)
+2. Selects an image (PNG, JPG, or WEBP, max 10 MB) and clicks **Upload & Classify**
 3. JavaScript PUTs the image to **API Gateway** → **S3** (AWS)
 4. S3 event triggers **EventBridge** rule (AWS)
 5. EventBridge sends authenticated POST to **Cloud Function** (GCP)
 6. Cloud Function:
    - Validates authentication token
-   - Retrieves AWS credentials from **Secret Manager** (GCP)
-   - Downloads the image from S3 using restricted credentials
-   - Sends it to **Vertex AI Gemini** for classification
-   - Retrieves Azure credentials from **Secret Manager** (GCP)
-   - Emails results via **Azure Communication Services**
+   - Obtains temporary AWS credentials via **Workload Identity Federation** (OIDC → STS)
+   - Downloads the image from S3
+   - Classifies with **Vertex AI Gemini 2.5 Flash**
+   - Sends styled email with results via **Azure Communication Services**
 7. Image is automatically deleted from S3 after 1 day
 
 ## Tear Down
