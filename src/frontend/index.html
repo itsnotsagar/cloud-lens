@@ -128,9 +128,11 @@
       showStatus('Uploading image to AWS S3 via API Gateway…', 'info');
 
       try {
-        const timestamp = Date.now();
+        const now = new Date();
+        const pad = (n) => String(n).padStart(2, '0');
+        const timestamp = `$${pad(now.getDate())}-$${pad(now.getMonth()+1)}-$${now.getFullYear()}_$${pad(now.getHours())}-$${pad(now.getMinutes())}-$${pad(now.getSeconds())}`;
         const safeName = selectedFile.name.replace(/[^a-zA-Z0-9._-]/g, '_');
-        const uploadName = `$${timestamp}-$${safeName}`;
+        const uploadName = `$${timestamp}_$${safeName}`;
         const url = `$${API_URL}/upload/$${uploadName}`;
         const contentType = selectedFile.type;
 

@@ -371,8 +371,28 @@ def _parse_classification(text: str) -> dict:
     return fields
 
 
+def _extract_display_name(image_name: str) -> tuple:
+    """Strip the timestamp prefix from the image name and return (display_name, upload_time)."""
+    # Format: DD-MM-YYYY_HH-MM-SS_filename.ext
+    match = re.match(r'^(\d{2}-\d{2}-\d{4}_\d{2}-\d{2}-\d{2})_(.*)', image_name)
+    if match:
+        raw_ts, name = match.group(1), match.group(2)
+        try:
+            dt = datetime.strptime(raw_ts, "%d-%m-%Y_%H-%M-%S")
+            upload_time = dt.strftime("%d %b %Y, %I:%M %p")
+        except ValueError:
+            upload_time = raw_ts.replace("_", " ").replace("-", ":")
+        return name, upload_time
+    # Legacy format: epoch_ms-filename.ext
+    match = re.match(r'^\d{10,13}-(.*)', image_name)
+    if match:
+        return match.group(1), None
+    return image_name, None
+
+
 def _build_email_html(safe_image_name: str, safe_classification: str) -> str:
     """Build a styled HTML email from the classification result."""
+    display_name, upload_time = _extract_display_name(safe_image_name)
     fields = _parse_classification(safe_classification)
 
     confidence = fields.get("confidence", "")
@@ -427,7 +447,8 @@ def _build_email_html(safe_image_name: str, safe_classification: str) -> str:
       <span style="font-size:18px;margin-right:10px">\U0001f5bc\ufe0f</span>
       <div>
         <div style="font-size:11px;color:#9ca3af;text-transform:uppercase;letter-spacing:0.5px">Image</div>
-        <div style="font-size:14px;color:#1f2937;font-weight:500;word-break:break-all">{safe_image_name}</div>
+        <div style="font-size:14px;color:#1f2937;font-weight:500;word-break:break-all">{display_name}</div>
+        {f'<div style="font-size:11px;color:#9ca3af;margin-top:2px">Uploaded {upload_time}</div>' if upload_time else ''}
       </div>
     </div>
     <table style="width:100%;border-collapse:collapse;background:#f9fafb;border:1px solid #e5e7eb;border-radius:8px;overflow:hidden">
@@ -468,7 +489,7 @@ def send_email(image_name: str, classification: str) -> bool:
                 "to": [{"address": NOTIFICATION_EMAIL}]
             },
             "content": {
-                "subject": f"Image Classification: {safe_image_name}",
+                "subject": f"Image Classification: {html_escape(_extract_display_name(image_name)[0])}",
                 "html": html_body,
                 "plainText": f"Image: {image_name}\n\nClassification:\n{classification}\n\n---\nMulti-Cloud Image Classification Pipeline",
             },
