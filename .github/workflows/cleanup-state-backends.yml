@@ -111,7 +111,6 @@ jobs:
         run: |
           echo '${{ secrets.GCP_SERVICE_ACCOUNT_KEY }}' | base64 -d > /tmp/gcp-key.json
           gcloud auth activate-service-account --key-file=/tmp/gcp-key.json
-          gcloud config set project ${{ vars.GCP_PROJECT_ID }}
 
       - name: Check and Delete GCS Bucket
         run: |
