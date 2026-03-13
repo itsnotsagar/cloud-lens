@@ -47,17 +47,14 @@ resource "google_cloudfunctions2_function" "classify" {
         object = google_storage_bucket_object.classify_function.name
       }
     }
-
-    # Increase build timeout for dependency installation
-    docker_repository = null
   }
 
   service_config {
     max_instance_count               = 10
     min_instance_count               = 0
-    available_memory                 = "1Gi"   # Increased for google-genai + boto3 + secretmanager cold starts
+    available_memory                 = "512Mi" # vertexai + boto3 + secretmanager need headroom for cold starts
     available_cpu                    = "1"     # Required for concurrency > 1
-    timeout_seconds                  = 540     # Max timeout for S3 download + Gemini inference + email send
+    timeout_seconds                  = 300     # S3 download + Gemini inference + email send
     max_instance_request_concurrency = 10      # I/O-bound work, safe to handle multiple requests per instance
 
     # Service-to-service authentication required

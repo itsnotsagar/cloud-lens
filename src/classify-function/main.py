@@ -55,8 +55,14 @@ REQUIRED_ENV_VARS = [
     "AZURE_SENDER_SECRET_ID"
 ]
 
+_environment_validated = False
+
 def validate_environment():
-    """Validate all required environment variables are set."""
+    """Validate all required environment variables are set (lazy validation)."""
+    global _environment_validated
+    if _environment_validated:
+        return
+    
     missing = [var for var in REQUIRED_ENV_VARS if not os.environ.get(var)]
     if missing:
         raise RuntimeError(f"Missing required environment variables: {', '.join(missing)}")
@@ -64,9 +70,8 @@ def validate_environment():
     email_pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
     if NOTIFICATION_EMAIL and not re.match(email_pattern, NOTIFICATION_EMAIL):
         raise RuntimeError(f"Invalid NOTIFICATION_EMAIL format: {NOTIFICATION_EMAIL}")
-
-# Validate at module load time
-validate_environment()
+    
+    _environment_validated = True
 
 # Allowed image extensions and their magic bytes
 ALLOWED_EXTENSIONS = {"jpg", "jpeg", "png", "webp"}
@@ -116,7 +121,10 @@ def classify_image(request):
     4. Sends the results via Azure Communication Services email
     """
     try:
-        # Step 0: Verify authentication
+        # Step 0: Validate environment (lazy, only on first request)
+        validate_environment()
+        
+        # Step 1: Verify authentication
         auth_header = request.headers.get("X-Auth-Token", "")
         expected_token = get_secret(AUTH_TOKEN_SECRET_ID)
         if not auth_header or not hmac.compare_digest(auth_header, expected_token):
