@@ -1,169 +1,191 @@
-# Multi-Cloud Image Classification Pipeline
+# Cloud Lens
 
-An end-to-end image classification pipeline deployed across **AWS**, **GCP**, and **Azure** using Terraform & GitHub Actions.
+Multi-cloud image classification pipeline across AWS, GCP, and Azure.
 
 ## Architecture
 
 ```
-Browser → CloudFront (HTTPS) → S3 Static Site (AWS)
-  ↓ PUT image via API Gateway
-S3 Bucket (AWS) [1-day retention]
-  ↓ S3 event notification
-EventBridge Rule (AWS) → API Destination [authenticated]
-  ↓ HTTP POST with auth token
-Cloud Function (GCP) [auth token validated in code]
-  ↓ Gets Google OIDC token → AWS STS AssumeRoleWithWebIdentity
-  ↓ Downloads image from S3 (temporary credentials via WIF)
-  ↓ Classifies via Vertex AI Gemini 2.5 Flash
-  ↓ Sends email via
-Azure Communication Services → Recipient Inbox
+Browser → CloudFront → S3 (AWS)
+  ↓
+API Gateway → S3 Bucket [1-day retention]
+  ↓
+EventBridge → Cloud Function (GCP) [authenticated]
+  ↓
+Gemini (Gen AI SDK) → Azure Email → Inbox
 ```
 
-**Supported image formats:** PNG, JPG, WEBP (max 10 MB)
-
-### Cloud Responsibilities
-
-| Cloud | Role | Services |
-|-------|------|----------|
-| **AWS** | Storage, CDN, event routing | S3, API Gateway, EventBridge, CloudFront |
-| **GCP** | AI classification, secrets management | Cloud Functions (2nd gen), Vertex AI Gemini, Secret Manager |
-| **Azure** | Email delivery | Communication Services |
-
-### Security Features
-
-- **HTTPS via CloudFront**: Website served over HTTPS with security response headers (HSTS, X-Frame-Options DENY, X-Content-Type-Options)
-- **Workload Identity Federation**: GCP Cloud Function obtains temporary AWS credentials via OIDC → STS (no stored AWS keys)
-- **Centralized Secrets**: All credentials stored in GCP Secret Manager
-- **Auto-delete Images**: S3 lifecycle policy removes images after 1 day
-- **Authenticated Event Routing**: EventBridge uses API key authentication
-- **Input Validation**: File type, size, magic bytes, and S3 key validation
-- **HTML Escape**: All user content escaped before email rendering
+| Cloud | Services |
+|-------|----------|
+| AWS | S3, API Gateway, EventBridge, CloudFront, IAM |
+| GCP | Cloud Functions, Gemini (via Gen AI SDK), Secret Manager |
+| Azure | Communication Services |
 
 ## Prerequisites
 
-1. **AWS** — IAM user with programmatic access (access key + secret)
-2. **GCP** — Service account with roles: Cloud Functions Admin, Vertex AI User, Storage Admin, IAM Service Account Admin
-3. **Azure** — Service Principal (SPN) with Contributor role on a subscription
+### Cloud Accounts
+
+- AWS: IAM user with programmatic access
+- GCP: Project with billing enabled + service account
+- Azure: Subscription + service principal
+
+### Enable GCP APIs
+
+```bash
+gcloud services enable \
+  cloudfunctions.googleapis.com \
+  cloudbuild.googleapis.com \
+  run.googleapis.com \
+  aiplatform.googleapis.com \
+  secretmanager.googleapis.com \
+  iam.googleapis.com \
+  iamcredentials.googleapis.com \
+  storage.googleapis.com
+```
 
 ## Setup
 
 ### 1. Configure GitHub Secrets
 
-Go to **Settings → Secrets and variables → Actions** and add:
+**Settings → Secrets and variables → Actions → Secrets**
 
-| Secret | Description |
-|--------|-------------|
-| `AWS_ACCESS_KEY_ID` | AWS IAM access key |
-| `AWS_SECRET_ACCESS_KEY` | AWS IAM secret key |
-| `GCP_SERVICE_ACCOUNT_KEY` | Base64-encoded GCP service account JSON (`base64 -i key.json`) |
-| `ARM_CLIENT_ID` | Azure SPN application (client) ID |
-| `ARM_CLIENT_SECRET` | Azure SPN client secret |
-| `ARM_TENANT_ID` | Azure AD tenant ID |
-| `ARM_SUBSCRIPTION_ID` | Azure subscription ID |
+| Secret | How to Get |
+|--------|------------|
+| `AWS_ACCESS_KEY_ID` | AWS Console → IAM → Users → Security credentials |
+| `AWS_SECRET_ACCESS_KEY` | Same as above |
+| `GCP_SERVICE_ACCOUNT_KEY` | `base64 -i key.json` or `base64 -w 0 key.json` |
+| `ARM_CLIENT_ID` | Azure Portal → App registrations |
+| `ARM_CLIENT_SECRET` | Azure Portal → App registrations → Certificates & secrets |
+| `ARM_TENANT_ID` | Azure Portal → Azure Active Directory |
+| `ARM_SUBSCRIPTION_ID` | Azure Portal → Subscriptions |
 
 ### 2. Configure GitHub Variables
 
-Go to **Settings → Secrets and variables → Actions → Variables** and add:
+**Settings → Secrets and variables → Actions → Variables**
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `PROJECT_PREFIX` | `imgclass` | Prefix for all resource names |
-| `NOTIFICATION_EMAIL` | — | Email to receive classification results |
-| `GCP_PROJECT_ID` | — | Your GCP project ID |
-| `AWS_REGION` | `us-east-1` | AWS deployment region |
-| `GCP_REGION` | `us-central1` | GCP deployment region |
-| `AZURE_LOCATION` | `eastus` | Azure deployment region |
+GitHub Actions uses these variables to pass values to Terraform during deployment.
+
+| Variable | Default | Required | Description |
+|----------|---------|----------|-------------|
+| `PROJECT_PREFIX` | `imgclass` | No | Resource name prefix |
+| `NOTIFICATION_EMAIL` | — | Yes | Email for classification results |
+| `GCP_PROJECT_ID` | — | Yes | Your GCP project ID |
+| `AWS_REGION` | `us-east-1` | No | AWS region |
+| `GCP_REGION` | `us-central1` | No | GCP region |
+| `AZURE_LOCATION` | `eastus` | No | Azure region |
 
 ### 3. Bootstrap State Backends
 
-Run the **Bootstrap State Backends** workflow once (manually via `workflow_dispatch`) to create:
-- AWS: S3 bucket + DynamoDB table for Terraform state
-- GCP: GCS bucket for Terraform state
-- Azure: Storage account + container for Terraform state
+**Actions → Setup Terraform State Backends → Run workflow**
+
+Type `create` to confirm. Creates:
+- AWS: S3 bucket (versioned, encrypted, native locking)
+- GCP: GCS bucket (versioned)
+- Azure: Storage account + container (versioned)
 
 ### 4. Deploy
 
-Push to `main` or run the **Deploy Multi-Cloud Image Classification** workflow manually.
+**Actions → Deploy Multi-Cloud Image Classification → Run workflow**
 
-The workflow deploys in this order:
-1. **Azure** (email service) + **AWS Initial** (storage, website, EventBridge with placeholders) — in parallel
-2. **GCP** (classification function + secrets) — needs outputs from step 1
-3. **AWS Final** (update EventBridge with real GCP function URL) — needs GCP outputs
+Or push to `main` branch.
 
-## Project Structure
+### 5. Access Application
 
+Find CloudFront URL in GitHub Actions output or AWS Console.
+
+## Configuration
+
+### User-Modifiable Terraform Variables
+
+These can be customized in `terraform/variables.tf` or via GitHub Variables:
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `project_prefix` | `imgclass` | Prefix for all resources |
+| `aws_region` | `us-east-1` | AWS deployment region |
+| `gcp_region` | `us-central1` | GCP deployment region |
+| `azure_location` | `eastus` | Azure deployment region |
+| `notification_email` | — | Recipient email (required) |
+| `gcp_project_id` | — | GCP project ID (required) |
+
+GCP-specific (in `terraform/gcp/variables.tf`):
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `gemini_model` | `gemini-2.5-flash` | Gemini model via Gen AI SDK |
+
+Note: Other variables are auto-populated from Terraform outputs during deployment.
+
+## Local Development
+
+```bash
+# 1. Deploy Azure
+cd terraform/azure
+terraform init
+terraform apply -var="notification_email=you@example.com"
+
+# 2. Deploy AWS (initial)
+cd ../aws
+terraform init
+terraform apply \
+  -var="gcp_function_url=https://placeholder" \
+  -var="eventbridge_auth_token=placeholder" \
+  -var="gcp_service_account_unique_id=placeholder"
+
+# 3. Deploy GCP
+cd ../gcp
+terraform init
+terraform apply \
+  -var="s3_bucket_name=$(cd ../aws && terraform output -raw image_bucket_name)" \
+  -var="aws_role_arn=$(cd ../aws && terraform output -raw gcp_function_role_arn)" \
+  -var="azure_email_connection_string=$(cd ../azure && terraform output -raw communication_service_connection_string)" \
+  -var="azure_sender_address=$(cd ../azure && terraform output -raw sender_address)" \
+  -var="notification_email=you@example.com"
+
+# 4. Update AWS
+cd ../aws
+terraform apply \
+  -var="gcp_function_url=$(cd ../gcp && terraform output -raw function_url)" \
+  -var="eventbridge_auth_token=$(cd ../gcp && terraform output -raw eventbridge_auth_token)" \
+  -var="gcp_service_account_unique_id=$(cd ../gcp && terraform output -raw service_account_unique_id)"
 ```
-.
-├── .github/workflows/
-│   ├── deploy.yml                  # Main deployment pipeline
-│   ├── destroy.yml                 # Infrastructure teardown
-│   ├── setup-state-backends.yml    # Bootstrap Terraform state backends
-│   └── cleanup-state-backends.yml  # Remove state backends
-├── terraform/
-│   ├── aws/                        # S3, API Gateway, EventBridge, CloudFront, IAM
-│   ├── gcp/                        # Cloud Function, Secret Manager, Vertex AI, IAM
-│   ├── azure/                      # Communication Services for email
-│   └── README.md
-├── src/
-│   ├── frontend/
-│   │   ├── index.html              # Upload UI (deployed to S3 via CloudFront)
-│   │   └── styles.css
-│   └── classify-function/
-│       ├── main.py                 # Classification + email logic
-│       └── requirements.txt
-└── README.md
-```
+
+## Cleanup
+
+**Destroy Infrastructure:** Actions → Destroy Multi-Cloud Infrastructure (type `DESTROY`)
+
+**Destroy State Backends:** Actions → Cleanup Terraform State Backends (type `DELETE`)
 
 ## How It Works
 
-1. User opens the website served via **CloudFront** (HTTPS) → **S3** (AWS)
-2. Selects an image (PNG, JPG, or WEBP, max 10 MB) and clicks **Upload & Classify**
-3. JavaScript PUTs the image to **API Gateway** → **S3** (AWS)
-4. S3 event triggers **EventBridge** rule (AWS)
-5. EventBridge sends authenticated POST to **Cloud Function** (GCP)
-6. Cloud Function:
-   - Validates authentication token
-   - Obtains temporary AWS credentials via **Workload Identity Federation** (OIDC → STS)
-   - Downloads the image from S3
-   - Classifies with **Vertex AI Gemini 2.5 Flash**
-   - Sends styled email with results via **Azure Communication Services**
-7. Image is automatically deleted from S3 after 1 day
+1. User uploads image via CloudFront website
+2. API Gateway stores image in S3
+3. S3 event triggers EventBridge
+4. EventBridge invokes GCP Cloud Function (authenticated)
+5. Function uses Workload Identity Federation for AWS access
+6. Downloads image, classifies with Gemini (Google Gen AI SDK)
+7. Sends styled email via Azure Communication Services
+8. Image auto-deletes after 1 day
 
-## Tear Down
+## Security
 
-Run the destroy workflow to remove all resources.
+- HTTPS via CloudFront
+- Workload Identity Federation (no stored AWS keys)
+- Secrets in GCP Secret Manager
+- Auto-delete images (1 day)
+- Authenticated EventBridge → GCP
+- Input validation + HTML escaping
 
-Destroy order (handled automatically):
-1. AWS (all resources: S3, API Gateway, EventBridge)
-2. GCP (Cloud Function + Secret Manager secrets)
-3. Azure (Communication Services)
+## Cost
 
-**Note:** State backends must be destroyed separately if needed.
+Free tier eligible:
+- AWS: S3, API Gateway (1M/month), EventBridge (14M/month)
+- GCP: Cloud Functions (2M/month), Gemini API (pay-per-use)
+- Azure: Communication Services (free tier)
 
-## Cost Estimate
+## Troubleshooting
 
-All services used fall within free tiers for demo/testing:
-- **AWS:** S3 free tier, API Gateway 1M free calls/month, EventBridge 14M free events/month
-- **GCP:** Cloud Functions 2M free invocations/month, Secret Manager 6 active secrets free, Vertex AI pay-per-use
-- **Azure:** Communication Services free tier includes email
+**GCP APIs:** `gcloud services enable <service>.googleapis.com`
 
-**Cost Optimizations:**
-- Images auto-delete after 1 day (reduces S3 storage)
-- CloudWatch logs retained for 7 days only
-- EventBridge used instead of Lambda (no compute costs for relay)
+**State Lock (GCP):** Delete lock file from GCS bucket manually
 
-## Limitations & Security Notes
-
-- API Gateway has a 10 MB payload limit (fine for most images)
-- Azure Communication Services sends from `donotreply@<id>.azurecomm.net` — no custom domain
-- GCP Cloud Function cold starts may add 3-5s on first invocation
-- Images are automatically deleted after 1 day
-- GCP Function requires authentication token (not publicly accessible)
-- AWS credentials used by GCP function are restricted to S3 read-only access
-
-**Production Recommendations:**
-- Use Workload Identity Federation instead of service account keys
-- Add rate limiting on API Gateway
-- Restrict CORS origins to your domain
-- Enable CloudTrail and Cloud Audit Logs
-- Use custom domain for Azure email
+**GitHub Actions:** Verify secrets/variables, check quotas, review logs
