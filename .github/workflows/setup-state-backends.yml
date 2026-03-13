@@ -117,14 +117,15 @@ jobs:
         run: |
           PROJECT_ID="${{ vars.GCP_PROJECT_ID }}"
           REGION="${{ env.GCP_REGION }}"
-          # Use project ID with underscores replaced by hyphens for DNS compatibility
-          PROJECT_ID_SAFE=$(echo "${PROJECT_ID}" | tr '_' '-')
-          BUCKET_NAME="${{ env.PROJECT_PREFIX }}-tfstate-${PROJECT_ID_SAFE}"
+          # Get project number for uniqueness
+          PROJECT_NUMBER=$(gcloud projects describe "${PROJECT_ID}" --format="value(projectNumber)")
+          BUCKET_NAME="${{ env.PROJECT_PREFIX }}-tfstate-${PROJECT_NUMBER}"
           
           # Check if bucket exists
           if ! gsutil ls -b "gs://${BUCKET_NAME}" &>/dev/null; then
             echo "Creating GCS bucket: ${BUCKET_NAME}"
             echo "Project: ${PROJECT_ID}"
+            echo "Project Number: ${PROJECT_NUMBER}"
             echo "Region: ${REGION}"
             
             gsutil mb -p "${PROJECT_ID}" -l "${REGION}" "gs://${BUCKET_NAME}"
@@ -269,7 +270,7 @@ jobs:
           echo "| Provider | Status | Backend Location |" >> "$GITHUB_STEP_SUMMARY"
           echo "|----------|--------|------------------|" >> "$GITHUB_STEP_SUMMARY"
           echo "| AWS | ${{ needs.setup-aws-backend.result }} | s3://${{ env.PROJECT_PREFIX }}-tf-state-<account-id> |" >> "$GITHUB_STEP_SUMMARY"
-          echo "| GCP | ${{ needs.setup-gcp-backend.result }} | gs://${{ env.PROJECT_PREFIX }}-tfstate-<project-id> |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| GCP | ${{ needs.setup-gcp-backend.result }} | gs://${{ env.PROJECT_PREFIX }}-tfstate-<project-number> |" >> "$GITHUB_STEP_SUMMARY"
           echo "| Azure | ${{ needs.setup-azure-backend.result }} | ${{ env.PROJECT_PREFIX }}tf<sub-short>/tfstate |" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
           echo "### Features Enabled" >> "$GITHUB_STEP_SUMMARY"
