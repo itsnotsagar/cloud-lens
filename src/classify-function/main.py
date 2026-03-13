@@ -252,12 +252,15 @@ def classify_with_gemini(image_bytes: bytes, filename: str) -> str:
 
     image_part = types.Part.from_bytes(data=image_bytes, mime_type=mime_type)
 
-    prompt = """Classify this image with:
+    prompt = """Classify this image and provide the following information, each on a separate line:
+
 **Category:** [main category]
 **Subcategory:** [specific type]
 **Confidence:** [High/Medium/Low]
-**Description:** [2-3 sentences]
-**Tags:** [comma-separated tags]"""
+**Description:** [2-3 sentences describing what you see in the image]
+**Tags:** [comma-separated tags]
+
+Make sure each field starts on a new line."""
 
     client = _get_genai_client()
     response = client.models.generate_content(
@@ -269,6 +272,10 @@ def classify_with_gemini(image_bytes: bytes, filename: str) -> str:
         ),
     )
     result = response.text
+    
+    # Log the raw response for debugging
+    logger.info("Gemini raw response: %s", result[:500])
+    
     if len(result) > MAX_CLASSIFICATION_LENGTH:
         result = result[:MAX_CLASSIFICATION_LENGTH] + "..."
     return result
@@ -296,14 +303,20 @@ def _parse_classification(text: str) -> dict:
         # Match lines like "**Category:** Animals" or "Category: Animals"
         match = re.match(r'\*{0,2}(Category|Subcategory|Confidence|Description|Tags)\s*:\s*\*{0,2}\s*(.*)', line, re.IGNORECASE)
         if match:
-            if current_key:
+            # Save previous field if exists
+            if current_key and current_value:
                 fields[current_key] = " ".join(current_value).strip()
             current_key = match.group(1).lower()
-            current_value = [match.group(2).strip()]
+            value = match.group(2).strip()
+            # Remove any trailing asterisks or markdown
+            value = re.sub(r'\*+$', '', value).strip()
+            current_value = [value] if value else []
         elif current_key:
+            # Continue multi-line field
             current_value.append(line)
 
-    if current_key:
+    # Save last field
+    if current_key and current_value:
         fields[current_key] = " ".join(current_value).strip()
 
     return fields
