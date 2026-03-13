@@ -1,7 +1,12 @@
 terraform {
   required_version = ">= 1.5.0"
 
-  # Backend configured via -backend-config during terraform init
+  # Backend configured via -backend-config during terraform init (GitHub Actions)
+  # For local development, uncomment and configure:
+  # backend "gcs" {
+  #   bucket = "imgclass-tf-state-<your-gcp-project-id>"
+  #   prefix = "gcp"
+  # }
   backend "gcs" {}
 
   required_providers {

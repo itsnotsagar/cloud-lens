@@ -14,14 +14,6 @@ on:
         options:
           - plan
           - apply
-      environment:
-        description: 'Deployment environment'
-        required: true
-        default: 'production'
-        type: choice
-        options:
-          - production
-          - staging
 
 env:
   TF_VERSION: "1.7.0"
@@ -51,6 +43,7 @@ jobs:
   deploy-azure:
     name: "Azure — Email Service"
     runs-on: ubuntu-latest
+    environment: cloud-lens
     outputs:
       email_connection_string: ${{ steps.outputs.outputs.email_connection_string }}
       sender_address: ${{ steps.outputs.outputs.sender_address }}
@@ -107,6 +100,7 @@ jobs:
   deploy-aws-initial:
     name: "AWS — Initial Setup"
     runs-on: ubuntu-latest
+    environment: cloud-lens
     outputs:
       image_bucket_name: ${{ steps.outputs.outputs.image_bucket_name }}
       image_bucket_arn: ${{ steps.outputs.outputs.image_bucket_arn }}
@@ -168,6 +162,7 @@ jobs:
   deploy-gcp:
     name: "GCP — Classification Function"
     runs-on: ubuntu-latest
+    environment: cloud-lens
     needs: [deploy-azure, deploy-aws-initial]
     if: always() && (needs.deploy-azure.result == 'success' && needs.deploy-aws-initial.result == 'success')
     outputs:
@@ -247,6 +242,7 @@ jobs:
   deploy-aws-final:
     name: "AWS — Final Update"
     runs-on: ubuntu-latest
+    environment: cloud-lens
     needs: [deploy-gcp, deploy-aws-initial]
     if: always() && (needs.deploy-gcp.result == 'success' && needs.deploy-aws-initial.result == 'success')
     steps:

@@ -44,25 +44,38 @@ gcloud services enable \
 
 ## Setup
 
-### 1. Configure GitHub Secrets
+### 1. Create GitHub Environment
 
-**Settings → Secrets and variables → Actions → Secrets**
+**Settings → Environments → New environment**
+
+- Name: `cloud-lens`
+- Click **Configure environment**
+
+### 2. Add Environment Secrets
+
+In the `cloud-lens` environment, add these secrets:
 
 | Secret | How to Get |
 |--------|------------|
 | `AWS_ACCESS_KEY_ID` | AWS Console → IAM → Users → Security credentials |
 | `AWS_SECRET_ACCESS_KEY` | Same as above |
-| `GCP_SERVICE_ACCOUNT_KEY` | `base64 -i key.json` or `base64 -w 0 key.json` |
-| `ARM_CLIENT_ID` | Azure Portal → App registrations |
-| `ARM_CLIENT_SECRET` | Azure Portal → App registrations → Certificates & secrets |
-| `ARM_TENANT_ID` | Azure Portal → Azure Active Directory |
-| `ARM_SUBSCRIPTION_ID` | Azure Portal → Subscriptions |
+| `GCP_SERVICE_ACCOUNT_KEY` | `base64 -i key.json` |
+| `ARM_CLIENT_ID` | `az ad sp create-for-rbac` (see below) |
+| `ARM_CLIENT_SECRET` | Same command output |
+| `ARM_TENANT_ID` | `az account show --query tenantId -o tsv` |
+| `ARM_SUBSCRIPTION_ID` | `az account show --query id -o tsv` |
 
-### 2. Configure GitHub Variables
+**Quick Azure setup:**
+```bash
+az ad sp create-for-rbac \
+  --name "cloud-lens-terraform" \
+  --role Contributor \
+  --scopes /subscriptions/$(az account show --query id -o tsv)
+```
 
-**Settings → Secrets and variables → Actions → Variables**
+### 3. Add Environment Variables
 
-GitHub Actions uses these variables to pass values to Terraform during deployment.
+In the `cloud-lens` environment, add these variables:
 
 | Variable | Default | Required | Description |
 |----------|---------|----------|-------------|
@@ -73,7 +86,7 @@ GitHub Actions uses these variables to pass values to Terraform during deploymen
 | `GCP_REGION` | `us-central1` | No | GCP region |
 | `AZURE_LOCATION` | `eastus` | No | Azure region |
 
-### 3. Bootstrap State Backends
+### 4. Bootstrap State Backends
 
 **Actions → Setup Terraform State Backends → Run workflow**
 
@@ -82,13 +95,13 @@ Type `create` to confirm. Creates:
 - GCP: GCS bucket (versioned)
 - Azure: Storage account + container (versioned)
 
-### 4. Deploy
+### 5. Deploy
 
 **Actions → Deploy Multi-Cloud Image Classification → Run workflow**
 
 Or push to `main` branch.
 
-### 5. Access Application
+### 6. Access Application
 
 Find CloudFront URL in GitHub Actions output or AWS Console.
 
@@ -117,13 +130,20 @@ Note: Other variables are auto-populated from Terraform outputs during deploymen
 
 ## Local Development
 
+**Prerequisites:** Terraform >= 1.5, AWS/gcloud/Azure CLIs configured, state backends created
+
+**Setup:**
+1. Uncomment backend config in `terraform/{aws,gcp,azure}/provider.tf`
+2. Update with your account IDs
+3. Deploy in order:
+
 ```bash
-# 1. Deploy Azure
+# 1. Azure
 cd terraform/azure
 terraform init
 terraform apply -var="notification_email=you@example.com"
 
-# 2. Deploy AWS (initial)
+# 2. AWS (initial)
 cd ../aws
 terraform init
 terraform apply \
@@ -131,10 +151,11 @@ terraform apply \
   -var="eventbridge_auth_token=placeholder" \
   -var="gcp_service_account_unique_id=placeholder"
 
-# 3. Deploy GCP
+# 3. GCP
 cd ../gcp
 terraform init
 terraform apply \
+  -var="gcp_project_id=your-project-id" \
   -var="s3_bucket_name=$(cd ../aws && terraform output -raw image_bucket_name)" \
   -var="aws_role_arn=$(cd ../aws && terraform output -raw gcp_function_role_arn)" \
   -var="azure_email_connection_string=$(cd ../azure && terraform output -raw communication_service_connection_string)" \

@@ -49,6 +49,7 @@ jobs:
   destroy-aws:
     name: "Destroy — AWS Infrastructure"
     runs-on: ubuntu-latest
+    environment: cloud-lens
     needs: confirm
     steps:
       - uses: actions/checkout@v4
@@ -87,6 +88,7 @@ jobs:
   destroy-gcp:
     name: "Destroy — GCP Classification Function"
     runs-on: ubuntu-latest
+    environment: cloud-lens
     needs: [confirm, destroy-aws]
     steps:
       - uses: actions/checkout@v4
@@ -132,6 +134,7 @@ jobs:
   destroy-azure:
     name: "Destroy — Azure Email Service"
     runs-on: ubuntu-latest
+    environment: cloud-lens
     needs: [confirm, destroy-gcp]
     steps:
       - uses: actions/checkout@v4

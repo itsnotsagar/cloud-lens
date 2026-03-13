@@ -1,7 +1,14 @@
 terraform {
   required_version = ">= 1.5.0"
 
-  # Backend configured via -backend-config during terraform init
+  # Backend configured via -backend-config during terraform init (GitHub Actions)
+  # For local development, uncomment and configure:
+  # backend "s3" {
+  #   bucket  = "imgclass-tf-state-<your-aws-account-id>"
+  #   key     = "aws/terraform.tfstate"
+  #   region  = "us-east-1"
+  #   encrypt = true
+  # }
   backend "s3" {}
 
   required_providers {
