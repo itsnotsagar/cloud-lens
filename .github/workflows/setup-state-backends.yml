@@ -115,13 +115,17 @@ jobs:
 
       - name: Create GCS Bucket for Terraform State
         run: |
-          BUCKET_NAME="${{ env.PROJECT_PREFIX }}-tf-state-${{ vars.GCP_PROJECT_ID }}"
+          PROJECT_ID="${{ vars.GCP_PROJECT_ID }}"
+          REGION="${{ env.GCP_REGION }}"
+          BUCKET_NAME="${{ env.PROJECT_PREFIX }}-tf-state-${PROJECT_ID}"
           
           # Check if bucket exists
           if ! gsutil ls -b "gs://${BUCKET_NAME}" &>/dev/null; then
             echo "Creating GCS bucket: ${BUCKET_NAME}"
+            echo "Project: ${PROJECT_ID}"
+            echo "Region: ${REGION}"
             
-            gsutil mb -p ${{ vars.GCP_PROJECT_ID }} -l ${{ env.GCP_REGION }} "gs://${BUCKET_NAME}"
+            gsutil mb -p "${PROJECT_ID}" -l "${REGION}" "gs://${BUCKET_NAME}"
             
             # Enable versioning
             gsutil versioning set on "gs://${BUCKET_NAME}"
