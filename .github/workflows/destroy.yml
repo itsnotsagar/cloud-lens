@@ -103,11 +103,19 @@ jobs:
           echo '${{ secrets.GCP_SERVICE_ACCOUNT_KEY }}' | base64 -d > /tmp/gcp-key.json
           echo "GOOGLE_APPLICATION_CREDENTIALS=/tmp/gcp-key.json" >> "$GITHUB_ENV"
 
+      - name: Get GCP Project Number
+        id: gcp-project
+        run: |
+          gcloud auth activate-service-account --key-file=/tmp/gcp-key.json
+          gcloud config set project ${{ vars.GCP_PROJECT_ID }}
+          PROJECT_NUMBER=$(gcloud projects describe "${{ vars.GCP_PROJECT_ID }}" --format="value(projectNumber)")
+          echo "project_number=${PROJECT_NUMBER}" >> "$GITHUB_OUTPUT"
+
       - name: Terraform Init
         working-directory: terraform/gcp
         run: |
           terraform init \
-            -backend-config="bucket=${{ env.PROJECT_PREFIX }}-tf-state-${{ vars.GCP_PROJECT_ID }}" \
+            -backend-config="bucket=${{ env.PROJECT_PREFIX }}-tfstate-${{ steps.gcp-project.outputs.project_number }}" \
             -backend-config="prefix=gcp"
 
       - name: Terraform Destroy
