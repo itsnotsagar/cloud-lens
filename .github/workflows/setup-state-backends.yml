@@ -121,7 +121,7 @@ jobs:
           if ! gsutil ls -b "gs://${BUCKET_NAME}" &>/dev/null; then
             echo "Creating GCS bucket: ${BUCKET_NAME}"
             
-            gsutil mb -p ${{ vars.GCP_PROJECT_ID }} -l ${{ env.GCP_REGION }} -b on "gs://${BUCKET_NAME}"
+            gsutil mb -p ${{ vars.GCP_PROJECT_ID }} -l ${{ env.GCP_REGION }} "gs://${BUCKET_NAME}"
             
             # Enable versioning
             gsutil versioning set on "gs://${BUCKET_NAME}"
