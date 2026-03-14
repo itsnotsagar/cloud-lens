@@ -82,17 +82,27 @@ jobs:
             aws s3api list-object-versions \
               --bucket "${BUCKET_NAME}" \
               --output json \
-              --query '{Objects: Versions[].{Key:Key,VersionId:VersionId}}' | \
-            jq -r '.Objects[]? | select(.Key != null and .Key != "") | [.Key, .VersionId] | @tsv' | \
-            xargs -n2 bash -c 'aws s3api delete-object --bucket "$0" --key "$1" --version-id "$2"' "${BUCKET_NAME}"
+              --query 'Versions[?Key!=`null`].[Key,VersionId]' \
+              --output text | \
+            while read -r key version_id; do
+              if [ -n "$key" ] && [ -n "$version_id" ]; then
+                echo "Deleting version: $key ($version_id)"
+                aws s3api delete-object --bucket "${BUCKET_NAME}" --key "$key" --version-id "$version_id"
+              fi
+            done
 
             # Delete all delete markers
             aws s3api list-object-versions \
               --bucket "${BUCKET_NAME}" \
               --output json \
-              --query '{Objects: DeleteMarkers[].{Key:Key,VersionId:VersionId}}' | \
-            jq -r '.Objects[]? | select(.Key != null and .Key != "") | [.Key, .VersionId] | @tsv' | \
-            xargs -n2 bash -c 'aws s3api delete-object --bucket "$0" --key "$1" --version-id "$2"' "${BUCKET_NAME}"
+              --query 'DeleteMarkers[?Key!=`null`].[Key,VersionId]' \
+              --output text | \
+            while read -r key version_id; do
+              if [ -n "$key" ] && [ -n "$version_id" ]; then
+                echo "Deleting marker: $key ($version_id)"
+                aws s3api delete-object --bucket "${BUCKET_NAME}" --key "$key" --version-id "$version_id"
+              fi
+            done
           fi
           
           # Delete the bucket
